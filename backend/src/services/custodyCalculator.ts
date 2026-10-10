@@ -1,30 +1,41 @@
 /**
  * CustodyLens 479 — Deterministic Custody Duration Calculator
  * 
- * Independent, pure calculation service for undertrial custody computation.
- * Strictly deterministic (no LLM involvement in arithmetic or date interval logic).
- * Implements calendar-aware duration arithmetic accounting for leap years,
- * statutory Section 479 BNSS thresholds (1/3rd first-offender proviso and 1/2nd general rule).
+ * Pure, independently tested calculation service for undertrial custody computation.
+ * Strictly deterministic — no LLM involvement in arithmetic or date interval logic.
+ * 
+ * Features:
+ * - Calendar-aware duration arithmetic accounting for leap years and exact month boundaries.
+ * - Supports multiple distinct custody intervals (e.g. arrest -> interim bail/release -> re-arrest).
+ * - Implements the Explanation to Section 479(1) BNSS: explicit deduction of accused-caused delay.
+ * - Computes statutory thresholds: 1/3rd (First Proviso), 1/2nd (Main Provision), 100% (Third Proviso Maximum Period Bar).
+ * - Surfaces evidentiary discrepancies (conflicting arrest dates, missing times, >24h magistrate production intervals).
+ * - Never invents custody end dates or presumes continuous custody across recorded releases.
  */
 
-export interface RemandInterval {
+export interface CustodyInterval {
   intervalId?: string;
-  startDate: string; // YYYY-MM-DD
-  endDate: string;   // YYYY-MM-DD
-  custodyType: 'police_custody' | 'judicial_custody';
+  startDate: string;           // ISO YYYY-MM-DD
+  endDate?: string | null;     // ISO YYYY-MM-DD (null if ongoing as of assessment date)
+  custodyType: 'police_custody' | 'judicial_custody' | 'general_custody';
   sourceDocumentName?: string;
+  sourceQuote?: string;
 }
 
 export interface CustodyCalculationInput {
-  arrestDate: string | null;           // YYYY-MM-DD
-  arrestTime?: string | null;          // HH:mm
+  arrestDate: string | null;               // YYYY-MM-DD (initial recorded arrest)
+  arrestTime?: string | null;              // HH:mm
   magistrateProductionDate?: string | null; // YYYY-MM-DD
   magistrateProductionTime?: string | null; // HH:mm
-  remandIntervals?: RemandInterval[];
-  asOfDate?: string;                   // Reference date for review (default: today)
-  maxImprisonmentMonths?: number | null; // Statutory maximum sentence for offence
-  isFirstOffender?: boolean | null;    // null if unknown
-  hasLifeOrDeathOffence?: boolean;     // Section 479(2) exclusion check
+  custodyIntervals?: CustodyInterval[];    // Itemized custody periods (interruptions, re-arrests)
+  accusedCausedDelayDays?: number;         // Explanation to Sec 479(1): delay caused by accused excluded
+  asOfDate?: string;                       // Reference date for review (default: today)
+  maxImprisonmentMonths?: number | null;   // Statutory maximum sentence for offence
+  conflictingArrestDates?: Array<{
+    documentName: string;
+    statedDate: string;
+    statement: string;
+  }>;
 }
 
 export interface CustodyDurationBreakdown {
@@ -46,25 +57,31 @@ export interface StatutoryThresholdProgress {
 export interface CustodyCalculationResult {
   isValidSequence: boolean;
   sequenceWarnings: string[];
-  totalCustodyDays: number;
+  
+  // Detention day counts
+  grossCustodyDays: number;
+  accusedCausedDelayDaysExcluded: number;
+  netCountableCustodyDays: number;
   durationBreakdown: CustodyDurationBreakdown;
+  
   policeCustodyDays: number;
   judicialCustodyDays: number;
+  
+  // Production interval checks
   productionDelayHours?: number | null;
   productionDelayFlagged: boolean;
   
-  // Section 479 BNSS metrics
+  // Date discrepancy tracking
+  hasConflictingDates: boolean;
+  dateDiscrepancyNotes: string[];
+  
+  // Section 479 BNSS thresholds
   oneThirdThreshold: StatutoryThresholdProgress | null;
   oneHalfThreshold: StatutoryThresholdProgress | null;
+  maximumPeriodThreshold: StatutoryThresholdProgress | null; // Third Proviso (100% max sentence)
   
-  status: 
-    | 'threshold_reached_one_third'
-    | 'threshold_reached_one_half'
-    | 'in_progress_threshold_not_reached'
-    | 'excluded_life_or_death'
-    | 'undetermined_missing_arrest_date'
-    | 'undetermined_missing_max_sentence';
-    
+  isMaximumPeriodExceeded: boolean; // Flag if net detention >= 100% max sentence
+  
   calculationNotes: string[];
 }
 
@@ -79,7 +96,7 @@ export function getCalendarDaysDifference(startDateStr: string, endDateStr: stri
 }
 
 /**
- * Breaks total calendar days into years, months, and days relative to a starting date.
+ * Breaks calendar days into years, months, and days relative to a starting date.
  */
 export function breakDownCalendarDuration(startDateStr: string, endDateStr: string): CustodyDurationBreakdown {
   const start = new Date(startDateStr + 'T00:00:00Z');
@@ -95,7 +112,6 @@ export function breakDownCalendarDuration(startDateStr: string, endDateStr: stri
 
   if (days < 0) {
     months -= 1;
-    // Get days in the previous month
     const prevMonthDate = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 0));
     days += prevMonthDate.getUTCDate();
   }
@@ -126,7 +142,7 @@ export function addMonthsToDate(startDateStr: string, monthsToAdd: number): stri
   
   // Guard against month rollover (e.g. adding 1 month to Jan 31 -> Feb 28/29)
   if (d.getUTCDate() < originalDay) {
-    d.setUTCDate(0); // set to last day of target month
+    d.setUTCDate(0);
   }
   
   return d.toISOString().slice(0, 10);
@@ -138,46 +154,69 @@ export function addMonthsToDate(startDateStr: string, monthsToAdd: number): stri
 export function calculateDetentionDuration(input: CustodyCalculationInput): CustodyCalculationResult {
   const sequenceWarnings: string[] = [];
   const calculationNotes: string[] = [];
+  const dateDiscrepancyNotes: string[] = [];
   const asOf = input.asOfDate || new Date().toISOString().slice(0, 10);
 
-  // 1. Arrest date check
+  // 1. Validate Conflicting Arrest Dates across Documents
+  let hasConflictingDates = false;
+  if (input.conflictingArrestDates && input.conflictingArrestDates.length > 1) {
+    hasConflictingDates = true;
+    const dateList = input.conflictingArrestDates
+      .map((c) => `"${c.documentName}" states ${c.statedDate}`)
+      .join(' vs ');
+    dateDiscrepancyNotes.push(
+      `CONFLICTING ARREST DATES: Documents record contradictory dates of initial arrest (${dateList}). Reviewer verification required before relying on computed duration.`
+    );
+  }
+
+  // 2. Validate Baseline Arrest Date
   if (!input.arrestDate) {
     return {
       isValidSequence: false,
       sequenceWarnings: ['Arrest date is missing. Detention duration cannot be calculated without confirmed initial custody date.'],
-      totalCustodyDays: 0,
+      grossCustodyDays: 0,
+      accusedCausedDelayDaysExcluded: 0,
+      netCountableCustodyDays: 0,
       durationBreakdown: { years: 0, months: 0, days: 0, totalDays: 0 },
       policeCustodyDays: 0,
       judicialCustodyDays: 0,
       productionDelayHours: null,
       productionDelayFlagged: false,
+      hasConflictingDates,
+      dateDiscrepancyNotes,
       oneThirdThreshold: null,
       oneHalfThreshold: null,
-      status: 'undetermined_missing_arrest_date',
-      calculationNotes: ['Please upload or verify the Arrest Memo or Remand Application to confirm the date of arrest.'],
+      maximumPeriodThreshold: null,
+      isMaximumPeriodExceeded: false,
+      calculationNotes: ['Arrest date required from Arrest Memo or Remand Application.'],
     };
   }
 
-  // 2. Validate arrest date not in future relative to asOfDate
+  // 3. Arrest Date Cannot Be In the Future
   if (input.arrestDate > asOf) {
     sequenceWarnings.push(`Arrest date (${input.arrestDate}) is after evaluation date (${asOf}). Sequence invalid.`);
     return {
       isValidSequence: false,
       sequenceWarnings,
-      totalCustodyDays: 0,
+      grossCustodyDays: 0,
+      accusedCausedDelayDaysExcluded: 0,
+      netCountableCustodyDays: 0,
       durationBreakdown: { years: 0, months: 0, days: 0, totalDays: 0 },
       policeCustodyDays: 0,
       judicialCustodyDays: 0,
       productionDelayHours: null,
       productionDelayFlagged: false,
+      hasConflictingDates,
+      dateDiscrepancyNotes,
       oneThirdThreshold: null,
       oneHalfThreshold: null,
-      status: 'undetermined_missing_arrest_date',
-      calculationNotes: ['Arrest date cannot be in the future.'],
+      maximumPeriodThreshold: null,
+      isMaximumPeriodExceeded: false,
+      calculationNotes: ['Arrest date cannot be in the future relative to the assessment date.'],
     };
   }
 
-  // 3. Magistrate 24-hour production check (Art. 22(2) Constitution / Sec 57 CrPC / Sec 58 BNSS)
+  // 4. Magistrate 24-Hour Production Check (Article 22(2) Constitution / Sec 57 CrPC / Sec 58 BNSS)
   let productionDelayHours: number | null = null;
   let productionDelayFlagged = false;
 
@@ -197,161 +236,157 @@ export function calculateDetentionDuration(input: CustodyCalculationInput): Cust
       if (productionDelayHours > 24) {
         productionDelayFlagged = true;
         sequenceWarnings.push(
-          `Review Flag: Recorded interval between arrest and magistrate production is approx. ${productionDelayHours} hours (> 24 hours). Flagged for reviewer check of transit time or date discrepancies.`
+          `Review Flag: Recorded interval between arrest and magistrate production is approx. ${productionDelayHours} hours (> 24 hours). Flagged for review of transit time or date discrepancies (does not automatically establish illegality).`
         );
       }
     }
   }
 
-  // 4. Calculate total custody period from arrest date to asOf date
-  const totalCustodyDays = getCalendarDaysDifference(input.arrestDate, asOf);
-  const durationBreakdown = breakDownCalendarDuration(input.arrestDate, asOf);
-  calculationNotes.push(
-    `Uninterrupted detention calculated from recorded arrest date (${input.arrestDate}) to assessment date (${asOf}): ${durationBreakdown.years} year(s), ${durationBreakdown.months} month(s), ${durationBreakdown.days} day(s) (${totalCustodyDays} total days).`
-  );
-
-  // 5. Custody Breakdown by Remand Intervals (Police vs Judicial Custody)
+  // 5. Custody Calculation Across Distinct Intervals (Handling Interruptions, Bail, Re-arrests)
+  let grossCustodyDays = 0;
   let policeCustodyDays = 0;
   let judicialCustodyDays = 0;
 
-  if (input.remandIntervals && input.remandIntervals.length > 0) {
-    for (const interval of input.remandIntervals) {
-      if (interval.startDate > interval.endDate) {
+  if (input.custodyIntervals && input.custodyIntervals.length > 0) {
+    for (const interval of input.custodyIntervals) {
+      const intervalEnd = interval.endDate || asOf;
+      if (interval.startDate > intervalEnd) {
         sequenceWarnings.push(
-          `Invalid remand period: Start date (${interval.startDate}) is after end date (${interval.endDate}).`
+          `Invalid custody interval: Start date (${interval.startDate}) is after end date (${intervalEnd}).`
         );
         continue;
       }
-      const days = getCalendarDaysDifference(interval.startDate, interval.endDate);
+
+      const days = getCalendarDaysDifference(interval.startDate, intervalEnd);
+      grossCustodyDays += days;
+
       if (interval.custodyType === 'police_custody') {
         policeCustodyDays += days;
-      } else {
+      } else if (interval.custodyType === 'judicial_custody') {
         judicialCustodyDays += days;
       }
     }
+
     calculationNotes.push(
-      `Recorded remand intervals account for ${policeCustodyDays} days Police Custody and ${judicialCustodyDays} days Judicial Custody.`
+      `Aggregated ${input.custodyIntervals.length} distinct custody interval(s): ${grossCustodyDays} gross custody days (${policeCustodyDays}d police, ${judicialCustodyDays}d judicial).`
     );
   } else {
-    // If specific remand intervals are not recorded separately, entire custody post-arrest is treated as general custody
+    // Single continuous custody from arrest date to asOfDate
+    grossCustodyDays = getCalendarDaysDifference(input.arrestDate, asOf);
     calculationNotes.push(
-      'Detailed itemized remand orders not provided; continuous detention calculated from initial arrest.'
+      `Continuous uninterrupted detention calculated from initial arrest date (${input.arrestDate}) to assessment date (${asOf}): ${grossCustodyDays} gross days.`
     );
   }
 
-  // 6. Section 479(2) Exclusion Check (Death or Life Imprisonment offences)
-  if (input.hasLifeOrDeathOffence) {
-    return {
-      isValidSequence: sequenceWarnings.length === 0,
-      sequenceWarnings,
-      totalCustodyDays,
-      durationBreakdown,
-      policeCustodyDays,
-      judicialCustodyDays,
-      productionDelayHours,
-      productionDelayFlagged,
-      oneThirdThreshold: null,
-      oneHalfThreshold: null,
-      status: 'excluded_life_or_death',
-      calculationNotes: [
-        ...calculationNotes,
-        'CRITICAL EXCLUSION: Section 479(2) BNSS explicitly excludes offences where death or imprisonment for life is specified as one of the punishments. Statutory bail review threshold is not applicable under Section 479.',
-      ],
+  // 6. Explanation to Section 479(1) BNSS: Deduct Accused-Caused Delay
+  const accusedDelay = Math.max(0, input.accusedCausedDelayDays || 0);
+  const netCountableCustodyDays = Math.max(0, grossCustodyDays - accusedDelay);
+
+  if (accusedDelay > 0) {
+    calculationNotes.push(
+      `Explanation to Section 479(1) BNSS applied: Deducted ${accusedDelay} day(s) attributable to delay in proceedings caused by the accused. Net countable detention: ${netCountableCustodyDays} days.`
+    );
+  }
+
+  const durationBreakdown = breakDownCalendarDuration(input.arrestDate, asOf);
+
+  // 7. Maximum Sentence & Statutory Threshold Computations
+  let oneThirdThreshold: StatutoryThresholdProgress | null = null;
+  let oneHalfThreshold: StatutoryThresholdProgress | null = null;
+  let maximumPeriodThreshold: StatutoryThresholdProgress | null = null;
+  let isMaximumPeriodExceeded = false;
+
+  if (input.maxImprisonmentMonths && input.maxImprisonmentMonths > 0) {
+    const maxMonths = input.maxImprisonmentMonths;
+
+    // (a) First Proviso: 1/3rd Threshold
+    const oneThirdMonths = Math.floor(maxMonths / 3);
+    const baseOneThirdDate = addMonthsToDate(input.arrestDate, oneThirdMonths);
+    const oneThirdDaysEst = getCalendarDaysDifference(input.arrestDate, baseOneThirdDate);
+    const oneThirdReached = netCountableCustodyDays >= oneThirdDaysEst;
+    const oneThirdDaysRemaining = oneThirdReached ? 0 : Math.max(0, oneThirdDaysEst - netCountableCustodyDays);
+    const targetThirdObj = new Date(baseOneThirdDate + 'T00:00:00Z');
+    targetThirdObj.setUTCDate(targetThirdObj.getUTCDate() + accusedDelay);
+    const oneThirdTargetDate = targetThirdObj.toISOString().slice(0, 10);
+    const oneThirdPct = Math.min(100, Math.round((netCountableCustodyDays / oneThirdDaysEst) * 100));
+
+    oneThirdThreshold = {
+      thresholdMonths: oneThirdMonths,
+      thresholdDaysEstimated: oneThirdDaysEst,
+      thresholdReached: oneThirdReached,
+      daysRemaining: oneThirdDaysRemaining,
+      targetDate: oneThirdTargetDate,
+      percentageCompleted: oneThirdPct,
     };
-  }
 
-  // 7. Maximum Punishment Check
-  if (!input.maxImprisonmentMonths || input.maxImprisonmentMonths <= 0) {
-    return {
-      isValidSequence: sequenceWarnings.length === 0,
-      sequenceWarnings,
-      totalCustodyDays,
-      durationBreakdown,
-      policeCustodyDays,
-      judicialCustodyDays,
-      productionDelayHours,
-      productionDelayFlagged,
-      oneThirdThreshold: null,
-      oneHalfThreshold: null,
-      status: 'undetermined_missing_max_sentence',
-      calculationNotes: [
-        ...calculationNotes,
-        'Statutory maximum punishment for the stated offences is unknown or unverified. Section 479 BNSS proportion cannot be determined without maximum sentence.',
-      ],
+    // (b) Main Provision: 1/2nd Threshold
+    const oneHalfMonths = Math.floor(maxMonths / 2);
+    const baseOneHalfDate = addMonthsToDate(input.arrestDate, oneHalfMonths);
+    const oneHalfDaysEst = getCalendarDaysDifference(input.arrestDate, baseOneHalfDate);
+    const oneHalfReached = netCountableCustodyDays >= oneHalfDaysEst;
+    const oneHalfDaysRemaining = oneHalfReached ? 0 : Math.max(0, oneHalfDaysEst - netCountableCustodyDays);
+    const targetHalfObj = new Date(baseOneHalfDate + 'T00:00:00Z');
+    targetHalfObj.setUTCDate(targetHalfObj.getUTCDate() + accusedDelay);
+    const oneHalfTargetDate = targetHalfObj.toISOString().slice(0, 10);
+    const oneHalfPct = Math.min(100, Math.round((netCountableCustodyDays / oneHalfDaysEst) * 100));
+
+    oneHalfThreshold = {
+      thresholdMonths: oneHalfMonths,
+      thresholdDaysEstimated: oneHalfDaysEst,
+      thresholdReached: oneHalfReached,
+      daysRemaining: oneHalfDaysRemaining,
+      targetDate: oneHalfTargetDate,
+      percentageCompleted: oneHalfPct,
     };
-  }
 
-  const maxMonths = input.maxImprisonmentMonths;
-  
-  // Section 479(1) First Proviso: One-Third (1/3) for First-Time Offenders
-  const oneThirdMonths = Math.floor(maxMonths / 3);
-  const oneThirdTargetDate = addMonthsToDate(input.arrestDate, oneThirdMonths);
-  const oneThirdDaysEst = getCalendarDaysDifference(input.arrestDate, oneThirdTargetDate);
-  const oneThirdReached = asOf >= oneThirdTargetDate;
-  const oneThirdDaysRemaining = oneThirdReached ? 0 : Math.max(0, getCalendarDaysDifference(asOf, oneThirdTargetDate));
-  const oneThirdPct = Math.min(100, Math.round((totalCustodyDays / oneThirdDaysEst) * 100));
+    // (c) Third Proviso: 100% Maximum Period Ceiling (Absolute Bar on Detention)
+    const baseMaxDate = addMonthsToDate(input.arrestDate, maxMonths);
+    const maxPeriodDaysEst = getCalendarDaysDifference(input.arrestDate, baseMaxDate);
+    const maxPeriodReached = netCountableCustodyDays >= maxPeriodDaysEst;
+    const maxPeriodDaysRemaining = maxPeriodReached ? 0 : Math.max(0, maxPeriodDaysEst - netCountableCustodyDays);
+    const targetMaxObj = new Date(baseMaxDate + 'T00:00:00Z');
+    targetMaxObj.setUTCDate(targetMaxObj.getUTCDate() + accusedDelay);
+    const maxPeriodTargetDate = targetMaxObj.toISOString().slice(0, 10);
+    const maxPeriodPct = Math.min(100, Math.round((netCountableCustodyDays / maxPeriodDaysEst) * 100));
 
-  const oneThirdThreshold: StatutoryThresholdProgress = {
-    thresholdMonths: oneThirdMonths,
-    thresholdDaysEstimated: oneThirdDaysEst,
-    thresholdReached: oneThirdReached,
-    daysRemaining: oneThirdDaysRemaining,
-    targetDate: oneThirdTargetDate,
-    percentageCompleted: oneThirdPct,
-  };
+    maximumPeriodThreshold = {
+      thresholdMonths: maxMonths,
+      thresholdDaysEstimated: maxPeriodDaysEst,
+      thresholdReached: maxPeriodReached,
+      daysRemaining: maxPeriodDaysRemaining,
+      targetDate: maxPeriodTargetDate,
+      percentageCompleted: maxPeriodPct,
+    };
 
-  // Section 479(1) Main Provision: One-Half (1/2) for Standard Undertrials
-  const oneHalfMonths = Math.floor(maxMonths / 2);
-  const oneHalfTargetDate = addMonthsToDate(input.arrestDate, oneHalfMonths);
-  const oneHalfDaysEst = getCalendarDaysDifference(input.arrestDate, oneHalfTargetDate);
-  const oneHalfReached = asOf >= oneHalfTargetDate;
-  const oneHalfDaysRemaining = oneHalfReached ? 0 : Math.max(0, getCalendarDaysDifference(asOf, oneHalfTargetDate));
-  const oneHalfPct = Math.min(100, Math.round((totalCustodyDays / oneHalfDaysEst) * 100));
-
-  const oneHalfThreshold: StatutoryThresholdProgress = {
-    thresholdMonths: oneHalfMonths,
-    thresholdDaysEstimated: oneHalfDaysEst,
-    thresholdReached: oneHalfReached,
-    daysRemaining: oneHalfDaysRemaining,
-    targetDate: oneHalfTargetDate,
-    percentageCompleted: oneHalfPct,
-  };
-
-  // 8. Determine Overall Status
-  let status: CustodyCalculationResult['status'] = 'in_progress_threshold_not_reached';
-
-  if (oneHalfReached) {
-    status = 'threshold_reached_one_half';
-    calculationNotes.push(
-      `STATUTORY THRESHOLD REACHED: Accused has served ${totalCustodyDays} days, exceeding the 1/2 threshold (${oneHalfMonths} months / ~${oneHalfDaysEst} days, reached on ${oneHalfTargetDate}) under Section 479(1) BNSS.`
-    );
-  } else if (oneThirdReached && input.isFirstOffender === true) {
-    status = 'threshold_reached_one_third';
-    calculationNotes.push(
-      `FIRST-OFFENDER PROVISO REACHED: Accused has served ${totalCustodyDays} days, exceeding the 1/3 threshold (${oneThirdMonths} months / ~${oneThirdDaysEst} days, reached on ${oneThirdTargetDate}) under the First Proviso to Section 479(1) BNSS.`
-    );
-  } else if (oneThirdReached && input.isFirstOffender === null) {
-    calculationNotes.push(
-      `NOTE: 1/3 duration threshold was reached on ${oneThirdTargetDate}. Accused may be a review candidate IF verified as a first-time offender (no prior convictions). Conviction history verification required.`
-    );
+    if (maxPeriodReached) {
+      isMaximumPeriodExceeded = true;
+      calculationNotes.push(
+        `CRITICAL STATUTORY BAR: Accused has served ${netCountableCustodyDays} net days, meeting or exceeding the 100% MAXIMUM sentence (${maxMonths} months / ~${maxPeriodDaysEst} days). Under Third Proviso to Section 479(1) BNSS, no undertrial can in any case be detained beyond the maximum period of imprisonment.`
+      );
+    }
   } else {
     calculationNotes.push(
-      `Under trial detention in progress. 1/3 threshold date: ${oneThirdTargetDate} (${oneThirdDaysRemaining} days remaining); 1/2 threshold date: ${oneHalfTargetDate} (${oneHalfDaysRemaining} days remaining).`
+      'Maximum statutory punishment for offence is unknown or unverified; statutory threshold percentages cannot be computed.'
     );
   }
 
   return {
     isValidSequence: sequenceWarnings.length === 0,
     sequenceWarnings,
-    totalCustodyDays,
+    grossCustodyDays,
+    accusedCausedDelayDaysExcluded: accusedDelay,
+    netCountableCustodyDays,
     durationBreakdown,
     policeCustodyDays,
     judicialCustodyDays,
     productionDelayHours,
     productionDelayFlagged,
+    hasConflictingDates,
+    dateDiscrepancyNotes,
     oneThirdThreshold,
     oneHalfThreshold,
-    status,
+    maximumPeriodThreshold,
+    isMaximumPeriodExceeded,
     calculationNotes,
   };
 }

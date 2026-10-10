@@ -84,6 +84,8 @@ export interface IAnalysis extends Document {
   humanReviewStatus: 'pending' | 'reviewed' | 'not_required';
   reviewedBy?: string;
   reviewedAt?: Date;
+  custodyCalculations?: any;
+  section479Assessment?: any;
   reportMetadata: IReportMetadata;
   createdAt: Date;
   updatedAt: Date;
@@ -210,6 +212,8 @@ const AnalysisSchema = new Schema<IAnalysis>(
     },
     reviewedBy: { type: String },
     reviewedAt: { type: Date },
+    custodyCalculations: { type: Schema.Types.Mixed },
+    section479Assessment: { type: Schema.Types.Mixed },
     reportMetadata: {
       summary: { type: String, default: '' },
       safetyDisclaimer: {

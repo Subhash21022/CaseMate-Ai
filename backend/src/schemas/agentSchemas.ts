@@ -148,6 +148,8 @@ export const WorkflowResultSchema = z.object({
   missingInformation: z.array(MissingInformationItemSchema),
   conflicts: z.array(ConflictItemSchema),
   clarificationQuestions: z.array(ClarificationQuestionSchema),
+  custodyCalculations: z.any().optional(),
+  section479Assessment: z.any().optional(),
   summary: z.string().optional().default('Case document analysis complete.'),
   verificationNotes: z.array(z.string()).optional().default([]),
   humanReviewRequired: z.boolean().optional().default(false),

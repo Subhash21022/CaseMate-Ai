@@ -1,6 +1,49 @@
-# CaseMate AI — Backend & Workflow Orchestration Engine
+# CustodyLens 479 — AI-Assisted Undertrial Detention Review
+### GDG Chennai DevFest on Campus 2026 — Courts, Legal Aid & Justice Services Track
 
-**CaseMate AI** is an AI-powered legal document navigation and analysis engine designed to assist legal-aid workers and self-represented litigants. It extracts structured facts, generates deterministic source-linked chronological timelines, flags conflicting dates across documents, identifies missing essential evidentiary records, generates targeted clarification questions, and compiles downloadable PDF handoff reports.
+**CustodyLens 479** helps authorized legal-aid reviewers, DLSA panel advocates, and jail visiting counsel examine fragmented case documents, reconstruct an undertrial custody timeline, detect conflicting dates and missing records, calculate custody duration using deterministic calendar-aware arithmetic, and prepare a verified draft review brief under **Section 479 of the Bharatiya Nagarik Suraksha Sanhita (BNSS), 2023**.
+
+> [!IMPORTANT]
+> **Human Review Assistance Disclaimer**: CustodyLens 479 assists human legal-aid review and does **NOT** make judicial bail, release, or sentencing decisions. All outputs are presented as administrative draft briefs requiring independent verification by authorized legal counsel before submission to a court of law.
+
+---
+
+## ⚡ Quickstart — Run Frontend (Presentation & Judging)
+
+```powershell
+# In a new terminal:
+cd frontend
+npm install
+npm run dev
+```
+Open **`http://localhost:5173`** (or the displayed Vite port, e.g. `http://localhost:5174`) in your browser.
+
+---
+
+## 🎯 2-3 Minute Hackathon Judge Presentation Sequence
+
+Follow this simple flow to demonstrate the core value of CustodyLens 479 in under 3 minutes:
+
+1. **Overview Dashboard**:
+   - Open `http://localhost:5174/` to view active case metrics, Section 479 candidate stats, discrepancy counts, and the real-time audit feed.
+2. **Instant Demo Launch**:
+   - Click **"Load Judging Demo Case"** in the top navigation bar to load *State of Tamil Nadu vs. Raju Kumar*.
+3. **Ingested Records & Grounded Facts**:
+   - View the 3 parsed legal records (*FIR No. 104/2025*, *Arrest Memo*, *Magistrate Remand Order*).
+   - Under **Extracted Material Facts**, click any **Evidence Citation Chip** (e.g. `case1_fir_theft.pdf`) to open the **Source Evidence Modal** showing verbatim text quotes and exact page references.
+4. **Custody Timeline & Milestone**:
+   - Switch to the **"Custody Timeline"** tab. Observe the chronological stepper from initial arrest (14-Aug-2025 21:00) to Magistrate production (15-Aug-2025 11:30 AM — within 24h limit) and the **1/3rd Milestone Badge** (14-Aug-2026).
+5. **Cross-Document Discrepancy Detection**:
+   - Click the **"Suresh Babu (48h Discrepancy)"** selector in the top bar.
+   - Switch to the **"Discrepancies & Gaps"** tab to see the side-by-side comparison of contradictory arrest dates: FIR states *12-May-2024* vs Remand Application states *14-May-2024* (a 48-hour variance requiring judicial clarification).
+6. **Section 479 BNSS Assessment & Deterministic Calculation**:
+   - Switch back to Raju Kumar and open the **"Section 479 BNSS Assessment"** tab.
+   - Inspect the **Deterministic Custody Duration** (423 net days, Explanation to Section 479(1) delay deduction).
+   - View the **Section 479(3) Jail Superintendent Statutory Mandate Banner** (active legal obligation for prison authorities).
+   - Review the 8-rule statutory checklist (*Capital Exclusion, Multi-Offence Restriction, First-Offender 1/3rd Proviso, etc.*).
+7. **Draft Legal-Aid Brief Generation & PDF Export**:
+   - Click **"Generate Draft Review Brief"** to preview the complete case dossier, including evidentiary references, recommended next steps for DLSA, and mandatory statutory disclaimers.
+   - Click **"Download PDF"** or **"Print"** to export.
 
 ---
 
@@ -182,26 +225,59 @@ Open `http://localhost:5678` in your browser to inspect or edit the workflow vis
 
 ## 🧪 Automated Testing & Live Verification
 
-### Run the Vitest Automated Test Suite (14 Tests)
+### Run the Vitest Automated Test Suite (45 Tests across 4 Suites)
 ```powershell
 cd backend
 npm test
 ```
-**Test Coverage Includes:**
-1. Health check & database connection
-2. Case workspace creation & retrieval
-3. Invalid Case ID and 404 validation
-4. File upload size & format validation
-5. Document extraction & duplicate detection (SHA-256)
-6. Prompt injection defense & untrusted input isolation
-7. Deterministic date normalization & chronological timeline sorting
-8. Date conflict detection across distinct documents
-9. Completeness analysis & unuploaded referenced document detection
-10. Source quotation & citation verification
-11. Protected internal route authentication (`x-internal-secret`)
-12. Asynchronous workflow status transitions (`created` -> `documents_uploaded` -> `processing` -> `human_review_required`)
-13. n8n workflow failure recording (`/failure`)
-14. Structured JSON and downloadable PDF report generation
+**Test Coverage Includes (100% Pass Rate across 45 Tests):**
+1. **`section479Rules.test.ts` (11 Tests)**:
+   - Capital / life imprisonment exclusion (`Sec 302 IPC`, `Sec 103 BNS`)
+   - Multiple pending cases restriction (`Sec 479(2) BNSS`)
+   - First-time offender 1/3rd threshold calculation (`Sec 479(1) First Proviso`)
+   - General undertrial 1/2nd maximum threshold calculation (`Sec 479(1)`)
+   - Accused-caused delay deduction (`Sec 479(1) Explanation`)
+   - Jail Superintendent mandatory application triggers (`Sec 479(3)`)
+   - Statutory bond conditions and human-review recommendation disclaimers
+2. **`custodyCalculator.test.ts` (9 Tests)**:
+   - Calendar-aware day arithmetic (inclusive day counting, leap year handling)
+   - Continuous police and judicial custody spell merging and deduplication
+   - Validating 24-hour statutory magistrate production limit (Article 22(2) & Section 58 BNSS)
+   - Contradictory arrest date detection across multiple records
+   - Intermittent custody periods and interim bail gap calculations
+3. **`custodylensIntegration.test.ts` (11 Tests)**:
+   - Case 1: Positive first-time offender (Section 379 IPC theft) qualifying at 1/3rd threshold
+   - Case 2: Multi-offence case with 48h conflicting arrest dates and Section 479(2) restriction
+   - Case 3: Murder allegation (Section 302 IPC) statutory exclusion
+   - Case 4: Adversarial prompt-injection containment in legal record text
+   - End-to-end PDF brief generation with mandatory statutory disclaimers
+4. **`casemate.test.ts` (14 Tests)**:
+   - Health check & database connection
+   - Case workspace creation & retrieval
+   - Invalid Case ID and 404 validation
+   - File upload size & format validation
+   - Document extraction & duplicate detection (SHA-256)
+   - Prompt injection defense & untrusted input isolation
+   - Deterministic date normalization & chronological timeline sorting
+   - Date conflict detection across distinct documents
+   - Completeness analysis & unuploaded referenced document detection
+   - Source quotation & citation verification
+   - Protected internal route authentication (`x-internal-secret`)
+   - Asynchronous workflow status transitions (`created` -> `documents_uploaded` -> `processing` -> `human_review_required`)
+   - n8n workflow failure recording (`/failure`)
+   - Structured JSON and downloadable PDF report generation
+
+### Run the Synthetic Sample Data Tests
+The repository includes realistic synthetic court records under `sample-data/custodylens/`:
+- `case1_fir_theft.pdf` & `case1_arrest_memo.pdf` & `case1_magistrate_remand_order.pdf` (Clean qualifying case)
+- `case2_multiple_offences_conflicting_dates.pdf` (Conflicting arrest dates)
+- `case3_life_death_exclusion.pdf` (Section 302 IPC Life imprisonment)
+- `case4_prompt_injection.pdf` (Adversarial injection attempt)
+
+To generate or rebuild fresh sample PDFs:
+```powershell
+node sample-data/custodylens/generate_custodylens_samples.cjs
+```
 
 ### Run the Live End-to-End Demo Script
 Execute the native demo script to verify the live integration between the backend, MongoDB, and n8n:
