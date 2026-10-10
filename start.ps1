@@ -1,9 +1,9 @@
 # ==============================================================================
-# CaseMate AI — One-Click Docker Startup Script (Windows PowerShell)
+# CaseMate AI - One-Click Docker Startup Script (Windows PowerShell)
 # ==============================================================================
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "   CaseMate AI — Automated Docker Stack Initialization    " -ForegroundColor Cyan
+Write-Host "   CaseMate AI - Automated Docker Stack Initialization    " -ForegroundColor Cyan
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 # 1. Check for .env file
