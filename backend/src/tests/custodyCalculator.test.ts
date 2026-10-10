@@ -7,13 +7,10 @@ import {
   CustodyCalculationInput,
 } from '../services/custodyCalculator.js';
 
-describe('CustodyLens 479 — Deterministic Custody Calculator Unit Tests', () => {
-  it('1. Correctly computes exact calendar days difference', () => {
-    // Non-leap year interval
+describe('CustodyLens 479 — Deterministic Custody Calculator Unit & Regression Tests', () => {
+  it('1. Computes exact calendar days difference including leap years', () => {
     expect(getCalendarDaysDifference('2023-01-01', '2023-01-10')).toBe(9);
-    // Across leap day (2024 is leap year: Feb has 29 days)
-    expect(getCalendarDaysDifference('2024-02-28', '2024-03-01')).toBe(2);
-    // Full leap year (2024)
+    expect(getCalendarDaysDifference('2024-02-28', '2024-03-01')).toBe(2); // 2024 is leap year
     expect(getCalendarDaysDifference('2024-01-01', '2025-01-01')).toBe(366);
   });
 
@@ -25,11 +22,10 @@ describe('CustodyLens 479 — Deterministic Custody Calculator Unit Tests', () =
     expect(breakdown.totalDays).toBe(461);
   });
 
-  it('3. Safely adds months to date preserving calendar boundaries', () => {
+  it('3. Safely adds months preserving calendar month ends', () => {
     expect(addMonthsToDate('2023-01-15', 6)).toBe('2023-07-15');
     expect(addMonthsToDate('2023-01-15', 12)).toBe('2024-01-15');
-    // Jan 31 + 1 month -> Feb 28 in non-leap year 2023
-    expect(addMonthsToDate('2023-01-31', 1)).toBe('2023-02-28');
+    expect(addMonthsToDate('2023-01-31', 1)).toBe('2023-02-28'); // Non-leap Feb
   });
 
   it('4. Rejects calculation when arrest date is missing', () => {
@@ -39,92 +35,90 @@ describe('CustodyLens 479 — Deterministic Custody Calculator Unit Tests', () =
     };
     const result = calculateDetentionDuration(input);
     expect(result.isValidSequence).toBe(false);
-    expect(result.status).toBe('undetermined_missing_arrest_date');
-    expect(result.totalCustodyDays).toBe(0);
+    expect(result.grossCustodyDays).toBe(0);
+    expect(result.netCountableCustodyDays).toBe(0);
     expect(result.sequenceWarnings[0]).toContain('Arrest date is missing');
   });
 
-  it('5. Flags Section 479(2) exclusion when offence carries death or life imprisonment', () => {
-    const input: CustodyCalculationInput = {
-      arrestDate: '2022-01-01',
-      asOfDate: '2024-01-01',
-      maxImprisonmentMonths: 240, // 20 years
-      hasLifeOrDeathOffence: true,
-      isFirstOffender: true,
-    };
-    const result = calculateDetentionDuration(input);
-    expect(result.status).toBe('excluded_life_or_death');
-    expect(result.oneThirdThreshold).toBeNull();
-    expect(result.oneHalfThreshold).toBeNull();
-    expect(result.calculationNotes.some((n) => n.includes('CRITICAL EXCLUSION'))).toBe(true);
-  });
-
-  it('6. Detects One-Third (1/3) threshold reached for confirmed first-time offender (Section 479(1) Proviso)', () => {
-    // 36 months max punishment (3 years)
-    // 1/3 threshold is 12 months (1 year)
-    // Arrest date: 2023-01-01, asOfDate: 2024-02-01 (> 12 months)
+  it('5. Computes multiple distinct custody intervals (handling release on bail and re-arrest)', () => {
+    // Accused arrested 2023-01-01, released on interim bail on 2023-02-01 (31 days)
+    // Re-arrested on 2023-05-01, detained until 2023-07-01 (61 days)
+    // Total gross custody = 31 + 61 = 92 days
     const input: CustodyCalculationInput = {
       arrestDate: '2023-01-01',
-      asOfDate: '2024-02-01',
+      asOfDate: '2023-07-01',
+      custodyIntervals: [
+        { startDate: '2023-01-01', endDate: '2023-02-01', custodyType: 'police_custody' },
+        { startDate: '2023-05-01', endDate: '2023-07-01', custodyType: 'judicial_custody' },
+      ],
       maxImprisonmentMonths: 36,
-      isFirstOffender: true,
-      hasLifeOrDeathOffence: false,
     };
     const result = calculateDetentionDuration(input);
     expect(result.isValidSequence).toBe(true);
-    expect(result.status).toBe('threshold_reached_one_third');
-    expect(result.oneThirdThreshold?.thresholdMonths).toBe(12);
-    expect(result.oneThirdThreshold?.thresholdReached).toBe(true);
-    expect(result.oneThirdThreshold?.daysRemaining).toBe(0);
-    expect(result.oneHalfThreshold?.thresholdReached).toBe(false); // 18 months not yet reached
+    expect(result.policeCustodyDays).toBe(31);
+    expect(result.judicialCustodyDays).toBe(61);
+    expect(result.grossCustodyDays).toBe(92);
+    expect(result.netCountableCustodyDays).toBe(92);
   });
 
-  it('7. Detects One-Half (1/2) threshold reached for standard undertrial (Section 479(1) Main Provision)', () => {
-    // 36 months max punishment (3 years)
-    // 1/2 threshold is 18 months (1.5 years)
-    // Arrest date: 2022-01-01, asOfDate: 2023-08-01 (19 months)
+  it('6. Correctly deducts accused-caused delay under Explanation to Section 479(1)', () => {
+    // Arrest: 2023-01-01, AsOf: 2024-01-01 (365 days gross)
+    // Accused caused 65 days delay in proceedings
+    // Net countable = 365 - 65 = 300 days
     const input: CustodyCalculationInput = {
-      arrestDate: '2022-01-01',
-      asOfDate: '2023-08-01',
+      arrestDate: '2023-01-01',
+      asOfDate: '2024-01-01',
+      accusedCausedDelayDays: 65,
       maxImprisonmentMonths: 36,
-      isFirstOffender: false, // not a first offender
-      hasLifeOrDeathOffence: false,
     };
     const result = calculateDetentionDuration(input);
-    expect(result.isValidSequence).toBe(true);
-    expect(result.status).toBe('threshold_reached_one_half');
-    expect(result.oneHalfThreshold?.thresholdMonths).toBe(18);
-    expect(result.oneHalfThreshold?.thresholdReached).toBe(true);
-    expect(result.oneHalfThreshold?.daysRemaining).toBe(0);
+    expect(result.grossCustodyDays).toBe(365);
+    expect(result.accusedCausedDelayDaysExcluded).toBe(65);
+    expect(result.netCountableCustodyDays).toBe(300);
+    expect(result.calculationNotes.some((n) => n.includes('Explanation to Section 479(1)'))).toBe(true);
   });
 
-  it('8. Flags magistrate production delay exceeding 24 hours', () => {
+  it('7. Detects Third Proviso breach when net custody reaches or exceeds 100% of maximum sentence', () => {
+    // 12 months maximum sentence (approx 365 days)
+    // In custody for 400 days
+    const input: CustodyCalculationInput = {
+      arrestDate: '2023-01-01',
+      asOfDate: '2024-02-10', // > 12 months
+      maxImprisonmentMonths: 12,
+    };
+    const result = calculateDetentionDuration(input);
+    expect(result.isMaximumPeriodExceeded).toBe(true);
+    expect(result.maximumPeriodThreshold?.thresholdReached).toBe(true);
+    expect(result.calculationNotes.some((n) => n.includes('CRITICAL STATUTORY BAR'))).toBe(true);
+  });
+
+  it('8. Surfaces conflicting arrest dates across multiple documents', () => {
+    const input: CustodyCalculationInput = {
+      arrestDate: '2023-05-10',
+      conflictingArrestDates: [
+        { documentName: 'FIR No. 45/2023', statedDate: '2023-05-10', statement: 'Arrested at 10 PM' },
+        { documentName: 'Arrest Memo', statedDate: '2023-05-12', statement: 'Arrested at 6 AM' },
+      ],
+      asOfDate: '2023-06-01',
+      maxImprisonmentMonths: 36,
+    };
+    const result = calculateDetentionDuration(input);
+    expect(result.hasConflictingDates).toBe(true);
+    expect(result.dateDiscrepancyNotes[0]).toContain('CONFLICTING ARREST DATES');
+  });
+
+  it('9. Flags magistrate production interval exceeding 24 hours without presuming illegality', () => {
     const input: CustodyCalculationInput = {
       arrestDate: '2023-05-10',
       arrestTime: '10:00',
       magistrateProductionDate: '2023-05-12',
-      magistrateProductionTime: '16:00', // ~54 hours later
+      magistrateProductionTime: '18:00', // ~56 hours later
       asOfDate: '2023-06-01',
       maxImprisonmentMonths: 36,
     };
     const result = calculateDetentionDuration(input);
     expect(result.productionDelayFlagged).toBe(true);
     expect(result.productionDelayHours).toBeGreaterThan(24);
-    expect(result.sequenceWarnings.some((w) => w.includes('> 24 hours'))).toBe(true);
-  });
-
-  it('9. Correctly computes itemized police vs judicial custody days from remand intervals', () => {
-    const input: CustodyCalculationInput = {
-      arrestDate: '2023-01-01',
-      asOfDate: '2023-02-01',
-      remandIntervals: [
-        { startDate: '2023-01-02', endDate: '2023-01-06', custodyType: 'police_custody' },
-        { startDate: '2023-01-06', endDate: '2023-01-20', custodyType: 'judicial_custody' },
-      ],
-      maxImprisonmentMonths: 24,
-    };
-    const result = calculateDetentionDuration(input);
-    expect(result.policeCustodyDays).toBe(4);
-    expect(result.judicialCustodyDays).toBe(14);
+    expect(result.sequenceWarnings[0]).toContain('> 24 hours');
   });
 });
