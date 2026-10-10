@@ -62,6 +62,35 @@ export interface StructuredReportData {
     context: string;
     suggestedAction?: string;
   }>;
+  custodyDurationSummary?: {
+    grossCustodyDays: number;
+    accusedCausedDelayDaysExcluded: number;
+    netCountableCustodyDays: number;
+    durationBreakdownText: string;
+    policeCustodyDays: number;
+    judicialCustodyDays: number;
+    productionDelayFlagged: boolean;
+    productionDelayHours?: number | null;
+    oneThirdThresholdTargetDate?: string | null;
+    oneHalfThresholdTargetDate?: string | null;
+    maximumPeriodTargetDate?: string | null;
+    isMaximumPeriodExceeded: boolean;
+  };
+  section479Assessment?: {
+    checklistVersion: string;
+    reviewCategory: string;
+    categoryTitle: string;
+    categorySummary: string;
+    jailSuperintendentMandateTriggered: boolean;
+    rules: Array<{
+      ruleId: string;
+      ruleName: string;
+      status: string;
+      finding: string;
+      humanReviewNote?: string;
+    }>;
+    recommendedLegalAidActions: string[];
+  };
   verificationAndReview: {
     verificationStatus: string;
     verificationNotes: string[];
@@ -77,11 +106,14 @@ export function compileReportData(
   documents: ILegalDocument[],
   analysis?: IAnalysis | null
 ): StructuredReportData {
+  const calc = analysis?.custodyCalculations;
+  const sec479 = analysis?.section479Assessment;
+
   return {
     caseOverview: {
       caseId: c._id.toString(),
       title: c.title,
-      category: c.category || 'General Legal-Aid',
+      category: c.category || 'Undertrial Legal-Aid Review',
       status: c.status,
       createdAt: c.createdAt,
       totalDocuments: documents.length,
@@ -136,6 +168,43 @@ export function compileReportData(
       context: q.context,
       suggestedAction: q.suggestedAction,
     })),
+    custodyDurationSummary: calc
+      ? {
+          grossCustodyDays: calc.grossCustodyDays || calc.totalCustodyDays || 0,
+          accusedCausedDelayDaysExcluded: calc.accusedCausedDelayDaysExcluded || 0,
+          netCountableCustodyDays: calc.netCountableCustodyDays || calc.totalCustodyDays || 0,
+          durationBreakdownText: calc.durationBreakdown
+            ? `${calc.durationBreakdown.years}y ${calc.durationBreakdown.months}m ${calc.durationBreakdown.days}d`
+            : 'N/A',
+          policeCustodyDays: calc.policeCustodyDays || 0,
+          judicialCustodyDays: calc.judicialCustodyDays || 0,
+          productionDelayFlagged: Boolean(calc.productionDelayFlagged),
+          productionDelayHours: calc.productionDelayHours,
+          oneThirdThresholdTargetDate: calc.oneThirdThreshold?.targetDate || null,
+          oneHalfThresholdTargetDate: calc.oneHalfThreshold?.targetDate || null,
+          maximumPeriodTargetDate: calc.maximumPeriodThreshold?.targetDate || null,
+          isMaximumPeriodExceeded: Boolean(calc.isMaximumPeriodExceeded),
+        }
+      : undefined,
+    section479Assessment: sec479
+      ? {
+          checklistVersion: sec479.checklistVersion || 'BNSS-2023-SEC479-V2.0',
+          reviewCategory: sec479.reviewCategory || 'insufficient_information',
+          categoryTitle: sec479.categoryTitle || 'Section 479 BNSS Assessment',
+          categorySummary: sec479.categorySummary || '',
+          jailSuperintendentMandateTriggered: Boolean(
+            sec479.jailSuperintendentMandate?.obligationTriggered
+          ),
+          rules: (sec479.rules || []).map((r: any) => ({
+            ruleId: r.ruleId,
+            ruleName: r.ruleName,
+            status: r.status,
+            finding: r.finding,
+            humanReviewNote: r.humanReviewNote,
+          })),
+          recommendedLegalAidActions: sec479.recommendedLegalAidActions || [],
+        }
+      : undefined,
     verificationAndReview: {
       verificationStatus: analysis?.verificationStatus || 'flagged_for_review',
       verificationNotes: analysis?.verificationNotes || [],
@@ -145,7 +214,7 @@ export function compileReportData(
     },
     safetyDisclaimer:
       analysis?.reportMetadata?.safetyDisclaimer ||
-      'DISCLAIMER: CaseMate AI provides non-lawyer administrative organization and issue-spotting support only. It does not provide legal advice, legal strategy, or representation. All facts, dates, and conclusions must be independently verified by a licensed attorney or qualified legal professional before relying upon them in legal proceedings.',
+      'DISCLAIMER: CustodyLens 479 generates an administrative legal-aid preparation brief for authorized review by legal aid counsel and DLSA. It does not provide legal advice or represent an official judicial release order. All Section 479 BNSS relief requires judicial adjudication by the competent court.',
   };
 }
 
@@ -161,126 +230,142 @@ export function generateReportPdf(report: StructuredReportData): Promise<Buffer>
 
       // Header Banner
       doc
-        .fontSize(22)
-        .fillColor('#1E3A8A')
-        .text('CaseMate AI — Case Preparation Report', { align: 'left' });
+        .fontSize(20)
+        .fillColor('#0F172A')
+        .text('CustodyLens 479 — Undertrial Detention Review Brief', { align: 'left' });
       doc
-        .fontSize(10)
-        .fillColor('#6B7280')
-        .text(`Generated on: ${new Date().toLocaleDateString()} | Non-Lawyer Administrative Support`, {
+        .fontSize(9)
+        .fillColor('#475569')
+        .text(`Generated on: ${new Date().toLocaleDateString()} | Draft For Authorized Human Review Only`, {
           align: 'left',
         });
-      doc.moveDown(0.8);
+      doc.moveDown(0.6);
 
-      // Horizontal Rule
-      doc.strokeColor('#D1D5DB').lineWidth(1).moveTo(50, doc.y).lineTo(545, doc.y).stroke();
-      doc.moveDown(1);
+      // Horizontal Divider
+      doc.strokeColor('#CBD5E1').lineWidth(1).moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+      doc.moveDown(0.8);
 
       // Section 1: Case Overview
-      doc.fontSize(14).fillColor('#111827').text('1. Case Overview');
-      doc.fontSize(10).fillColor('#374151');
-      doc.text(`Case ID: ${report.caseOverview.caseId}`);
+      doc.fontSize(13).fillColor('#0F172A').text('1. Case Overview & Status');
+      doc.fontSize(9.5).fillColor('#334155');
       doc.text(`Case Title: ${report.caseOverview.title}`);
+      doc.text(`Case ID: ${report.caseOverview.caseId}`);
       doc.text(`Category: ${report.caseOverview.category}`);
-      doc.text(`Status: ${report.caseOverview.status.toUpperCase()}`);
-      doc.text(`Total Documents: ${report.caseOverview.totalDocuments}`);
-      doc.moveDown(1);
+      doc.text(`Workflow Status: ${report.caseOverview.status.toUpperCase()}`);
+      doc.text(`Verified Documents Ingested: ${report.caseOverview.totalDocuments}`);
+      doc.moveDown(0.8);
 
-      // Section 2: Verification & Review Status
-      doc.fontSize(14).fillColor('#111827').text('2. Verification & Safety Review');
-      doc.fontSize(10).fillColor('#374151');
-      doc.text(`Verification Status: ${report.verificationAndReview.verificationStatus.toUpperCase()}`);
-      doc.text(`Human Review: ${report.verificationAndReview.humanReviewStatus.toUpperCase()}`);
-      if (report.verificationAndReview.verificationNotes.length > 0) {
-        doc.fillColor('#B45309').text('Verification Notes:');
-        for (const note of report.verificationAndReview.verificationNotes) {
-          doc.text(`  • ${note}`);
+      // Section 2: Section 479 BNSS Review Assessment (If Present)
+      if (report.section479Assessment) {
+        const sec = report.section479Assessment;
+        doc.fontSize(13).fillColor('#1E3A8A').text('2. Section 479 BNSS (2023) Statutory Assessment');
+        doc.fontSize(9.5).fillColor('#0F172A');
+        doc.text(`Classification: ${sec.categoryTitle} [${sec.reviewCategory.toUpperCase()}]`);
+        doc.fillColor('#334155').text(`Summary: ${sec.categorySummary}`);
+
+        if (sec.jailSuperintendentMandateTriggered) {
+          doc
+            .fillColor('#B45309')
+            .text('• Active Statutory Duty: Section 479(3) Jail Superintendent obligation is TRIGGERED.');
         }
-      }
-      doc.moveDown(1);
 
-      // Section 3: Document Inventory
-      doc.fontSize(14).fillColor('#111827').text('3. Document Inventory');
-      doc.fontSize(10).fillColor('#374151');
+        doc.moveDown(0.5);
+        doc.fillColor('#1E293B').text('Statutory Checklist Findings:');
+        for (const rule of sec.rules) {
+          const icon = rule.status === 'satisfied' ? '[SATISFIED]' : rule.status === 'restriction_flagged' ? '[RESTRICTION]' : `[${rule.status.toUpperCase()}]`;
+          doc.fillColor(rule.status === 'restriction_flagged' ? '#B91C1C' : '#334155');
+          doc.text(`  • ${rule.ruleName} ${icon}: ${rule.finding}`);
+        }
+        doc.moveDown(0.8);
+      }
+
+      // Section 3: Deterministic Custody Duration Summary
+      if (report.custodyDurationSummary) {
+        const c = report.custodyDurationSummary;
+        doc.fontSize(13).fillColor('#0F172A').text('3. Deterministic Custody Duration Breakdown');
+        doc.fontSize(9.5).fillColor('#334155');
+        doc.text(`Net Countable Custody: ${c.netCountableCustodyDays} days (${c.durationBreakdownText})`);
+        doc.text(`Gross Detention: ${c.grossCustodyDays} days | Accused-Caused Delay Excluded: ${c.accusedCausedDelayDaysExcluded} days`);
+        doc.text(`Custody Division: ${c.policeCustodyDays} days Police Custody | ${c.judicialCustodyDays} days Judicial Custody`);
+
+        if (c.productionDelayFlagged) {
+          doc.fillColor('#B45309').text(`Review Notice: Recorded initial production interval was approx. ${c.productionDelayHours} hours (> 24h).`);
+        }
+        if (c.oneThirdThresholdTargetDate) {
+          doc.fillColor('#334155').text(`1/3rd Milestone Target Date (First Proviso): ${c.oneThirdThresholdTargetDate}`);
+        }
+        if (c.oneHalfThresholdTargetDate) {
+          doc.fillColor('#334155').text(`1/2nd Milestone Target Date (Main Provision): ${c.oneHalfThresholdTargetDate}`);
+        }
+        if (c.isMaximumPeriodExceeded) {
+          doc.fillColor('#DC2626').text('CRITICAL NOTICE: Net custody exceeds 100% of maximum statutory imprisonment.');
+        }
+        doc.moveDown(0.8);
+      }
+
+      // Section 4: Document Inventory & Citations
+      doc.fontSize(13).fillColor('#0F172A').text('4. Ingested Evidence Inventory');
+      doc.fontSize(9.5).fillColor('#334155');
       for (const item of report.documentInventory) {
-        doc.text(
-          `• ${item.filename} — Type: ${item.detectedType} (${item.pageCount} pg) | Status: ${item.extractionStatus}`
-        );
+        doc.text(`• ${item.filename} — [${item.detectedType}] (${item.pageCount} pg) | Extraction: ${item.extractionStatus}`);
         if (item.warnings.length > 0) {
-          doc.fillColor('#DC2626').text(`    Warning: ${item.warnings.join(', ')}`).fillColor('#374151');
+          doc.fillColor('#DC2626').text(`    Note: ${item.warnings.join(', ')}`).fillColor('#334155');
         }
       }
-      doc.moveDown(1);
+      doc.moveDown(0.8);
 
-      // Section 4: Chronological Timeline
-      doc.fontSize(14).fillColor('#111827').text('4. Chronological Case Timeline');
-      doc.fontSize(10).fillColor('#374151');
+      // Section 5: Chronological Custody Timeline
+      doc.fontSize(13).fillColor('#0F172A').text('5. Source-Linked Custody Chronology');
+      doc.fontSize(9).fillColor('#334155');
       if (report.timeline.length === 0) {
-        doc.text('No dated events extracted.');
+        doc.text('No dated custody events extracted.');
       } else {
-        for (const event of report.timeline) {
+        for (const event of report.timeline.slice(0, 15)) {
           const dateStr = event.date || 'Undated';
-          const conflictFlag = event.hasConflict ? ' [! CONFLICT DETECTED]' : '';
+          const conflictFlag = event.hasConflict ? ' [! CONFLICT]' : '';
           doc.fillColor(event.hasConflict ? '#DC2626' : '#1E40AF');
           doc.text(`[${dateStr}] ${event.title}${conflictFlag}`);
-          doc.fillColor('#374151');
-          doc.text(`  Source: ${event.sourceDocumentName}`);
-          doc.text(`  Excerpt: "${event.description}"`);
+          doc.fillColor('#475569');
+          doc.text(`  Source: ${event.sourceDocumentName} | "${event.description.slice(0, 110)}"`);
           if (event.conflictDetails) {
-            doc.fillColor('#DC2626').text(`  Conflict: ${event.conflictDetails}`).fillColor('#374151');
+            doc.fillColor('#DC2626').text(`  Discrepancy: ${event.conflictDetails}`).fillColor('#475569');
           }
-          doc.moveDown(0.4);
+          doc.moveDown(0.3);
         }
       }
-      doc.moveDown(1);
+      doc.moveDown(0.8);
 
-      // Section 5: Conflicting Information
+      // Section 6: Conflicting Information & Discrepancies
       if (report.conflictingInformation.length > 0) {
-        doc.fontSize(14).fillColor('#DC2626').text('5. Conflicting Facts & Date Discrepancies');
-        doc.fontSize(10).fillColor('#374151');
+        doc.fontSize(13).fillColor('#B91C1C').text('6. Evidentiary Discrepancies & Date Conflicts');
+        doc.fontSize(9).fillColor('#334155');
         for (const conf of report.conflictingInformation) {
           doc.fillColor('#991B1B').text(`• Issue: ${conf.issue}`);
-          doc.fillColor('#374151');
-          doc.text(`    Doc A (${conf.documentA.name}): "${conf.documentA.statement}"`);
-          doc.text(`    Doc B (${conf.documentB.name}): "${conf.documentB.statement}"`);
-          doc.moveDown(0.4);
+          doc.fillColor('#475569');
+          doc.text(`    Source A (${conf.documentA.name}): "${conf.documentA.statement}"`);
+          doc.text(`    Source B (${conf.documentB.name}): "${conf.documentB.statement}"`);
+          doc.moveDown(0.3);
         }
-        doc.moveDown(1);
+        doc.moveDown(0.8);
       }
 
-      // Section 6: Missing-Information Checklist
-      doc.fontSize(14).fillColor('#111827').text('6. Missing-Information Checklist');
-      doc.fontSize(10).fillColor('#374151');
-      for (const item of report.missingInformationChecklist) {
-        const mandatedStr = item.isLegallyMandated ? '[LEGALLY MANDATED]' : '[RECOMMENDED]';
-        doc.text(`• ${item.description} — ${mandatedStr} (${item.importance.toUpperCase()})`);
-        if (item.legalBasis) {
-          doc.fillColor('#4B5563').text(`    Basis: ${item.legalBasis}`).fillColor('#374151');
+      // Section 7: Action Items for Legal Aid Counsel / DLSA
+      doc.fontSize(13).fillColor('#0F172A').text('7. Recommended Legal-Aid & DLSA Action Items');
+      doc.fontSize(9.5).fillColor('#334155');
+      const actions = report.section479Assessment?.recommendedLegalAidActions || [];
+      if (actions.length > 0) {
+        for (const act of actions) {
+          doc.text(`• ${act}`);
         }
-      }
-      doc.moveDown(1);
-
-      // Section 7: Questions for Legal-Aid Worker
-      doc.fontSize(14).fillColor('#111827').text('7. Clarification Questions for Handoff');
-      doc.fontSize(10).fillColor('#374151');
-      if (report.clarificationQuestions.length === 0) {
-        doc.text('No clarification questions pending.');
       } else {
-        for (const q of report.clarificationQuestions) {
-          doc.text(`• [Target: ${q.targetAudience.toUpperCase()}] ${q.question}`);
-          doc.text(`    Context: ${q.context}`);
-          if (q.suggestedAction) {
-            doc.text(`    Suggested Action: ${q.suggestedAction}`);
-          }
-          doc.moveDown(0.4);
-        }
+        doc.text('• Coordinate with Jail Visiting Advocate to verify undertrial status.');
       }
-      doc.moveDown(1.5);
+      doc.moveDown(1.2);
 
       // Section 8: Legal Safety Disclaimer
-      doc.strokeColor('#F87171').lineWidth(1).moveTo(50, doc.y).lineTo(545, doc.y).stroke();
-      doc.moveDown(0.8);
-      doc.fontSize(9).fillColor('#7F1D1D');
+      doc.strokeColor('#EF4444').lineWidth(1).moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+      doc.moveDown(0.6);
+      doc.fontSize(8).fillColor('#7F1D1D');
       doc.text(report.safetyDisclaimer, { align: 'justify' });
 
       doc.end();

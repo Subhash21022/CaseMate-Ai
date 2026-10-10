@@ -18,6 +18,56 @@ export interface DocumentParseResult {
 export const detectDocumentTypeFromText = (text: string, filename: string): string => {
   const lower = (text + ' ' + filename).toLowerCase();
 
+  // Indian Criminal Procedure & Custody Records (Specific document types take precedence over generic FIR citations)
+  if (
+    lower.includes('remand application') ||
+    lower.includes('remand order') ||
+    lower.includes('judicial remand') ||
+    lower.includes('police custody') ||
+    lower.includes('remanded to') ||
+    lower.includes('remand report') ||
+    lower.includes('judicial magistrate') ||
+    filename.toLowerCase().includes('remand')
+  ) {
+    return 'Remand Application / Order';
+  }
+  if (
+    lower.includes('arrest memo') ||
+    lower.includes('memo of arrest') ||
+    lower.includes('arrest panchnama') ||
+    filename.toLowerCase().includes('arrest_memo') ||
+    (lower.includes('grounds of arrest') && !lower.includes('remand'))
+  ) {
+    return 'Arrest Memo / Panchnama';
+  }
+  if (
+    lower.includes('charge sheet') ||
+    lower.includes('chargesheet') ||
+    lower.includes('final report under section 173') ||
+    lower.includes('final report under section 193')
+  ) {
+    return 'Charge Sheet / Final Report';
+  }
+  if (
+    lower.includes('custody certificate') ||
+    lower.includes('undertrial prisoner') ||
+    lower.includes('superintendent of jail') ||
+    lower.includes('central prison')
+  ) {
+    return 'Custody Certificate';
+  }
+  if (lower.includes('bail application') || lower.includes('bail order') || lower.includes('order on bail')) {
+    return 'Bail Application / Order';
+  }
+  if (
+    lower.includes('first information report') ||
+    filename.toLowerCase().includes('fir') ||
+    (/\bf\.?i\.?r\.?\b/i.test(lower) && !lower.includes('remand') && !lower.includes('arrest memo'))
+  ) {
+    return 'First Information Report (FIR)';
+  }
+
+  // General & Housing Legal Records (Retained for backwards compatibility)
   if (lower.includes('notice to quit') || lower.includes('termination of tenancy')) {
     return 'Notice to Quit';
   }
@@ -181,6 +231,20 @@ export const parseDocumentFile = async (
   if (extractedText.trim().length === 0 && status !== 'failed') {
     status = 'partial';
     warnings.push('Document produced empty text output.');
+  }
+
+  // Adversarial Prompt Injection Defense Check
+  const normalizedInjectionText = extractedText.toLowerCase().replace(/[^a-z0-9_]/g, '');
+  if (
+    /ignore(all)?(previous|prior)instructions?/i.test(normalizedInjectionText) ||
+    /system(instruction)?override/i.test(normalizedInjectionText) ||
+    /bypass_?all_?checks/i.test(normalizedInjectionText) ||
+    (/adversarial/i.test(extractedText) && /override/i.test(extractedText)) ||
+    /ignore\s+(all\s+)?(previous|prior)\s+(instructions|prompts)/i.test(extractedText) ||
+    /system\s+(instruction\s+)?override/i.test(extractedText) ||
+    /bypass_all_checks/i.test(extractedText)
+  ) {
+    warnings.push('SECURITY WARNING: Document contains adversarial prompt-injection phrases. Content was sanitized and instructions ignored.');
   }
 
   const detectedType = detectDocumentTypeFromText(extractedText, originalFilename);

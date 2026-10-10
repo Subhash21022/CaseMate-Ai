@@ -107,7 +107,12 @@ export async function runDocumentAnalysisAgent(
   const text = document.extractedText;
 
   // Defensive Prompt Injection Check
+  const normalizedText = text.toLowerCase().replace(/[^a-z0-9_]/g, '');
   const hasInjectionAttempt =
+    /ignore(all)?(previous|prior)instructions?/i.test(normalizedText) ||
+    /system(instruction)?override/i.test(normalizedText) ||
+    /bypass_?all_?checks/i.test(normalizedText) ||
+    (/adversarial/i.test(text) && /override/i.test(text)) ||
     /ignore\s+(all\s+)?(previous|prior)\s+(instructions|prompts)/i.test(text) ||
     /system\s+(instruction\s+)?override/i.test(text);
 
@@ -190,7 +195,114 @@ function extractDocumentDeterministic(
 
   let factCounter = 1;
 
-  // Extract Case/Docket references
+  // Extract FIR / Police / Docket references
+  const firMatch = text.match(/(?:fir\s*(?:no\.?|number)?|crime\s*(?:no\.?|number)?)[\s#:.-]*([0-9]+[/\-][0-9]{2,4}|[0-9]+)/i);
+  if (firMatch) {
+    caseReferences.push(`FIR ${firMatch[1].trim()}`);
+    facts.push({
+      factId: `F-${docIdStr.slice(-4)}-${factCounter++}`,
+      category: 'FIR / Crime Reference',
+      statement: `First Information Report registered under reference ${firMatch[0].trim()}`,
+      isExplicit: true,
+      sourceDocumentId: docIdStr,
+      sourceDocumentName: doc.originalFilename,
+      sourcePage: 1,
+      sourceQuote: firMatch[0].trim(),
+      confidence: 'high',
+    });
+  }
+
+  const policeStationMatch = text.match(/(?:police\s+station|ps:?)[\s#:.-]*([A-Za-z\s]+?)(?:,|\n|$)/i);
+  if (policeStationMatch && policeStationMatch[1].trim().length > 2) {
+    facts.push({
+      factId: `F-${docIdStr.slice(-4)}-${factCounter++}`,
+      category: 'Police Station',
+      statement: `Jurisdictional Police Station: ${policeStationMatch[1].trim()}`,
+      isExplicit: true,
+      sourceDocumentId: docIdStr,
+      sourceDocumentName: doc.originalFilename,
+      sourcePage: 1,
+      sourceQuote: policeStationMatch[0].trim(),
+      confidence: 'high',
+    });
+  }
+
+  // Extract Accused / Undertrial Person details
+  const accusedMatch = text.match(/(?:accused(?:\s+person)?|name\s+of\s+arrested\s+person)[\s#:.-]+([A-Za-z\s]+?)(?:,?\s*(?:s\/o|d\/o|w\/o|age|\n|$))/i);
+  if (accusedMatch && accusedMatch[1].trim().length > 2) {
+    const accusedName = accusedMatch[1].trim();
+    parties.push({ name: accusedName, role: 'Accused / Undertrial' });
+    facts.push({
+      factId: `F-${docIdStr.slice(-4)}-${factCounter++}`,
+      category: 'Accused Identity',
+      statement: `Identified accused / undertrial person: ${accusedName}`,
+      isExplicit: true,
+      sourceDocumentId: docIdStr,
+      sourceDocumentName: doc.originalFilename,
+      sourcePage: 1,
+      sourceQuote: accusedMatch[0].trim(),
+      confidence: 'high',
+    });
+  }
+
+  // Extract Charged Penal Sections (e.g. IPC 379, BNS 303(2), IPC 302)
+  const offenceMatches = [...text.matchAll(/(?:u\/s|under\s+section|section)\s*([0-9]+(?:\([0-9a-zA-Z]+\))?(?:\s*(?:IPC|BNS|Arms\s+Act|NDPS|CrPC|BNSS))?)/gi)];
+  for (const m of offenceMatches.slice(0, 4)) {
+    facts.push({
+      factId: `F-${docIdStr.slice(-4)}-${factCounter++}`,
+      category: 'Charged Offence',
+      statement: `Charged penal section stated in document: ${m[0].trim()}`,
+      isExplicit: true,
+      sourceDocumentId: docIdStr,
+      sourceDocumentName: doc.originalFilename,
+      sourcePage: 1,
+      sourceQuote: m[0].trim(),
+      confidence: 'high',
+    });
+  }
+
+  // Extract Arrest Details
+  const arrestDateMatch = text.match(
+    /(?:date\s+(?:and\s+time\s+)?of\s+arrest|date\s+of\s+apprehension|arrested\s+on|apprehended\s+on)[\s#:.-]+([A-Za-z0-9\s,/-]+?)(?:\s+at|\.|\n|$)/i
+  );
+  if (arrestDateMatch && arrestDateMatch[1].trim().length > 3) {
+    facts.push({
+      factId: `F-${docIdStr.slice(-4)}-${factCounter++}`,
+      category: 'Arrest Event',
+      statement: `Date of initial custody/arrest stated as: ${arrestDateMatch[1].trim()}`,
+      isExplicit: true,
+      sourceDocumentId: docIdStr,
+      sourceDocumentName: doc.originalFilename,
+      sourcePage: 1,
+      sourceQuote: arrestDateMatch[0].trim(),
+      confidence: 'high',
+    });
+  }
+
+  // Extract Criminal Antecedents / First Offender Status
+  const deSpacedDoc = text.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (
+    deSpacedDoc.includes('nopreviousconviction') ||
+    deSpacedDoc.includes('firsttimeoffender') ||
+    deSpacedDoc.includes('nopastconviction') ||
+    deSpacedDoc.includes('cleanantecedent') ||
+    deSpacedDoc.includes('nopastcriminalrecord') ||
+    /no\s+previous\s+convictions?|first\s*-?\s*time\s+offender|clean\s+antecedents?|no\s+past\s+criminal\s+record/i.test(text)
+  ) {
+    facts.push({
+      factId: `F-${docIdStr.slice(-4)}-${factCounter++}`,
+      category: 'Criminal Antecedents',
+      statement: 'Record states no previous convictions (clean antecedent history / first-time offender).',
+      isExplicit: true,
+      sourceDocumentId: docIdStr,
+      sourceDocumentName: doc.originalFilename,
+      sourcePage: 1,
+      sourceQuote: 'No previous convictions recorded / First time offender',
+      confidence: 'high',
+    });
+  }
+
+  // Extract Case/Docket references (general)
   const docketMatch = text.match(/(?:docket|case|notice reference)[\s#:.-]+([a-zA-Z0-9_-]+)/i);
   if (docketMatch) {
     caseReferences.push(docketMatch[1].trim());
@@ -258,20 +370,36 @@ function extractDocumentDeterministic(
     });
   }
 
-  // Extract Dates
+  // Extract Dates with explicit prefix tagging
   const dateRegex = /(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{4}/gi;
   const allDateMatches = [...text.matchAll(dateRegex)];
-  const seenDates = new Set<string>();
+  const seenDateContexts = new Set<string>();
 
   for (const match of allDateMatches) {
     const rawDate = match[0];
     const norm = normalizeDate(rawDate);
-    if (!seenDates.has(rawDate)) {
-      seenDates.add(rawDate);
+    const before = text.substring(Math.max(0, match.index! - 60), match.index!);
+    const after = text.substring(match.index! + rawDate.length, Math.min(text.length, match.index! + rawDate.length + 60));
+
+    const isOccurrence = /occurrence|incident|offen[sc]e|crime\s+date/i.test(before);
+    const isArrest = !isOccurrence && /(?:date\s+(?:and\s+time\s+)?of\s+arrest|date\s+of\s+apprehension|arrested\s+on|apprehended(?:\s+on)?|taken\s+into\s+custody|\barrest\b)/i.test(before);
+    const isProduction = /(?:produced\s+before|first\s+production|magistrate\s+production)/i.test(before);
+    const isRemand = /(?:remanded\s+to|remand)/i.test(before);
+
+    let prefixTag = '';
+    if (isOccurrence) prefixTag = '[Occurrence Date] ';
+    else if (isArrest) prefixTag = '[Arrest Event] ';
+    else if (isProduction) prefixTag = '[Production Event] ';
+    else if (isRemand) prefixTag = '[Remand Event] ';
+
+    const context = `${prefixTag}${before.trim()} ${rawDate} ${after.trim()}`.trim();
+    const contextKey = `${norm || rawDate}_${prefixTag}_${before.slice(-20).toLowerCase()}`;
+    if (!seenDateContexts.has(contextKey)) {
+      seenDateContexts.add(contextKey);
       datesFound.push({
         rawDate,
         normalizedDate: norm,
-        context: text.substring(Math.max(0, match.index! - 30), Math.min(text.length, match.index! + 60)).trim(),
+        context,
       });
     }
   }
@@ -333,7 +461,21 @@ export function runTimelineAgent(
       let title = 'Dated Event';
       let description = d.context;
 
-      if (/notice\s+to\s+quit\s+served|personally\s+served/i.test(d.context)) {
+      if (/\[Occurrence Date\]/i.test(d.context)) {
+        title = 'Date of Occurrence';
+      } else if (/\[Arrest Event\]/i.test(d.context) || (!/occurrence/i.test(d.context) && /(?:date\s+(?:and\s+time\s+)?of\s+arrest|date\s+of\s+apprehension|arrested\s+on|apprehended(?:\s+on)?|taken\s+into\s+custody|\barrest\b)/i.test(d.context))) {
+        title = 'Arrest of Accused';
+      } else if (/\[Production Event\]/i.test(d.context) || /produced\s+before|first\s+production|magistrate\s+production/i.test(d.context)) {
+        title = 'Magistrate First Production';
+      } else if (/\[Remand Event\]/i.test(d.context) || /remanded\s+to\s+judicial|jc\s+remand/i.test(d.context)) {
+        title = 'Judicial Custody Remand Order';
+      } else if (/remanded\s+to\s+police|pc\s+remand|police\s+custody/i.test(d.context)) {
+        title = 'Police Custody Remand Order';
+      } else if (/bail\s+hearing|bail\s+application|order\s+on\s+bail|bail\s+rejected/i.test(d.context)) {
+        title = 'Bail Hearing / Order';
+      } else if (/charge\s+sheet|chargesheet|final\s+report/i.test(d.context)) {
+        title = 'Charge Sheet / Final Report Filing';
+      } else if (/notice\s+to\s+quit\s+served|personally\s+served/i.test(d.context)) {
         title = 'Notice to Quit Service Date';
       } else if (/date\s+of\s+issuance|notice\s+reference/i.test(d.context)) {
         title = 'Notice to Quit Issuance Date';
@@ -367,14 +509,42 @@ export function runTimelineAgent(
   }
 
   // Deterministic Date Conflict Detection:
-  // Check for conflicting notice dates or hearing dates across distinct documents
+  // Check for conflicting notice dates, arrest dates, or hearing dates across distinct documents
   for (let i = 0; i < events.length; i++) {
     for (let j = i + 1; j < events.length; j++) {
       const eA = events[i];
       const eB = events[j];
 
       if (eA.sourceDocumentId !== eB.sourceDocumentId) {
-        // Conflict scenario: Notice to Quit Service/Issuance Date Discrepancy
+        // Conflict scenario 1: Conflicting Arrest Date Discrepancy
+        const isArrestA = /arrest/i.test(eA.title) || /date\s+of\s+arrest|arrested/i.test(eA.description);
+        const isArrestB = /arrest/i.test(eB.title) || /date\s+of\s+arrest|arrested/i.test(eB.description);
+
+        if (isArrestA && isArrestB && eA.date && eB.date && eA.date !== eB.date) {
+          eA.hasConflict = true;
+          eA.conflictDetails = `Contradicted by ${eB.sourceDocumentName} stating arrest date as ${eB.date}`;
+          eB.hasConflict = true;
+          eB.conflictDetails = `Contradicted by ${eA.sourceDocumentName} stating arrest date as ${eA.date}`;
+
+          detectedConflicts.push({
+            conflictId: `CONF-ARREST-${eA.eventId}-${eB.eventId}`,
+            issue: `Conflicting Date of Arrest: Document "${eA.sourceDocumentName}" records arrest on ${eA.date}, whereas document "${eB.sourceDocumentName}" records arrest on ${eB.date}.`,
+            documentA: {
+              id: eA.sourceDocumentId,
+              name: eA.sourceDocumentName,
+              statement: eA.description,
+              date: eA.date,
+            },
+            documentB: {
+              id: eB.sourceDocumentId,
+              name: eB.sourceDocumentName,
+              statement: eB.description,
+              date: eB.date,
+            },
+          });
+        }
+
+        // Conflict scenario 2: Notice to Quit Service/Issuance Date Discrepancy
         const isNoticeDateA = /notice.*(issuance|service|quit)/i.test(eA.title) || /notice to quit/i.test(eA.description);
         const isNoticeDateB = /notice.*(issuance|service|quit)/i.test(eB.title) || /notice to quit/i.test(eB.description);
 
@@ -438,49 +608,106 @@ export function runCompletenessAgent(
   const docTypes = new Set(documents.map((d) => d.detectedDocumentType));
   const fullText = documents.map((d) => d.extractedText).join(' ');
 
-  // 1. Check for standard legal-aid preparation documents
-  // (a) Master Lease Agreement
-  const hasLease = docTypes.has('Lease Agreement') || /written\s+lease|master\s+residential\s+lease/i.test(fullText);
-  if (!docTypes.has('Lease Agreement')) {
-    missingInfo.push({
-      itemId: 'MISS-001',
-      category: 'Contractual Agreement',
-      description: 'Original signed Master Residential Lease Agreement',
-      importance: 'critical',
-      isLegallyMandated: false,
-      legalBasis:
-        'Written lease is required evidentiary proof of agreed rent, security deposit terms, and cure provisions under GL c. 186, though oral tenancies at will remain lawful.',
-      status: 'missing',
-    });
-  }
+  // 1. Check for standard legal-aid preparation documents based on case category
+  const isEviction = category.toLowerCase().includes('eviction') || category.toLowerCase().includes('tenancy');
 
-  // (b) Official Rent Ledger
-  if (!docTypes.has('Rent Ledger')) {
-    missingInfo.push({
-      itemId: 'MISS-002',
-      category: 'Accounting & Damages',
-      description: 'Official Landlord Tenant Rent Ledger / Itemized Accounting of Arrears',
-      importance: 'critical',
-      isLegallyMandated: false,
-      legalBasis:
-        'Required to verify disputed arrearage calculations, proper allocation of payments, and compliance with statutory late fee rules.',
-      status: 'missing',
-    });
-  }
+  if (isEviction) {
+    // (a) Master Lease Agreement
+    const hasLease = docTypes.has('Lease Agreement') || /written\s+lease|master\s+residential\s+lease/i.test(fullText);
+    if (!docTypes.has('Lease Agreement')) {
+      missingInfo.push({
+        itemId: 'MISS-001',
+        category: 'Contractual Agreement',
+        description: 'Original signed Master Residential Lease Agreement',
+        importance: 'critical',
+        isLegallyMandated: false,
+        legalBasis:
+          'Written lease is required evidentiary proof of agreed rent, security deposit terms, and cure provisions under GL c. 186, though oral tenancies at will remain lawful.',
+        status: 'missing',
+      });
+    }
 
-  // (c) Proof of Service / Return of Service
-  const hasProofOfService = /return\s+of\s+service|proof\s+of\s+service|affidavit\s+of\s+service|constable/i.test(fullText);
-  if (!hasProofOfService) {
-    missingInfo.push({
-      itemId: 'MISS-003',
-      category: 'Service & Due Process',
-      description: 'Affidavit of Service / Return of Service by Constable or Process Server',
-      importance: 'critical',
-      isLegallyMandated: true,
-      legalBasis:
-        'Proof that the statutory notice period was legally delivered is a jurisdictional prerequisite for maintaining a summary process action in court.',
-      status: 'missing',
-    });
+    // (b) Official Rent Ledger
+    if (!docTypes.has('Rent Ledger')) {
+      missingInfo.push({
+        itemId: 'MISS-002',
+        category: 'Accounting & Damages',
+        description: 'Official Landlord Tenant Rent Ledger / Itemized Accounting of Arrears',
+        importance: 'critical',
+        isLegallyMandated: false,
+        legalBasis:
+          'Required to verify disputed arrearage calculations, proper allocation of payments, and compliance with statutory late fee rules.',
+        status: 'missing',
+      });
+    }
+
+    // (c) Proof of Service / Return of Service
+    const hasProofOfService = /return\s+of\s+service|proof\s+of\s+service|affidavit\s+of\s+service|constable/i.test(fullText);
+    if (!hasProofOfService) {
+      missingInfo.push({
+        itemId: 'MISS-003',
+        category: 'Service & Due Process',
+        description: 'Affidavit of Service / Return of Service by Constable or Process Server',
+        importance: 'critical',
+        isLegallyMandated: true,
+        legalBasis:
+          'Proof that the statutory notice period was legally delivered is a jurisdictional prerequisite for maintaining a summary process action in court.',
+        status: 'missing',
+      });
+    }
+  } else {
+    // Criminal Undertrial Detention Review (Section 479 BNSS)
+    const hasArrestMemo = docTypes.has('Arrest Memo / Panchnama') || /arrest\s+memo|memo\s+of\s+arrest|arrest\s+panchnama/i.test(fullText);
+    if (!hasArrestMemo) {
+      missingInfo.push({
+        itemId: 'MISS-CRIM-001',
+        category: 'Statutory Arrest Documentation',
+        description: 'Official Arrest Memo / Panchnama confirming arrest timestamp, grounds, and witness intimation',
+        importance: 'critical',
+        isLegallyMandated: true,
+        legalBasis: 'Article 22(1) Constitution of India & Section 41B CrPC / Section 36 BNSS require preparation of arrest memo signed by witness and accused.',
+        status: 'missing',
+      });
+    }
+
+    const hasFir = docTypes.has('First Information Report (FIR)') || /first\s+information\s+report|fir\s+no/i.test(fullText);
+    if (!hasFir) {
+      missingInfo.push({
+        itemId: 'MISS-CRIM-002',
+        category: 'Primary Crime Registration',
+        description: 'Registered First Information Report (FIR) stating specific penal sections and allegations',
+        importance: 'critical',
+        isLegallyMandated: true,
+        legalBasis: 'Section 154 CrPC / Section 173 BNSS foundational record of cognizable offence.',
+        status: 'missing',
+      });
+    }
+
+    const hasRemand = docTypes.has('Remand Application / Order') || /remand\s+order|remanded\s+to|judicial\s+custody/i.test(fullText);
+    if (!hasRemand) {
+      missingInfo.push({
+        itemId: 'MISS-CRIM-003',
+        category: 'Judicial Custody Authorization',
+        description: 'Magistrate Remand Application and Order Sheet confirming lawful detention authorization',
+        importance: 'critical',
+        isLegallyMandated: true,
+        legalBasis: 'Article 22(2) Constitution of India & Section 167 CrPC / Section 187 BNSS judicial remand orders.',
+        status: 'missing',
+      });
+    }
+
+    const hasCustodyCert = docTypes.has('Custody Certificate') || /custody\s+certificate|superintendent\s+of\s+jail/i.test(fullText);
+    if (!hasCustodyCert) {
+      missingInfo.push({
+        itemId: 'MISS-CRIM-004',
+        category: 'Jail Superintendent Custody Certificate',
+        description: 'Official Jail Custody Certificate verifying unexpired custody days, conduct, and previous convictions',
+        importance: 'recommended',
+        isLegallyMandated: false,
+        legalBasis: 'Section 479(3) BNSS jail administration record required to confirm first-offender status under First Proviso.',
+        status: 'missing',
+      });
+    }
   }
 
   // 2. Identify Referenced Documents that are NOT Uploaded
