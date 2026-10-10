@@ -1,11 +1,13 @@
 import { createApp } from './app.js';
 import { connectDB, disconnectDB } from './config/db.js';
+import { ensureStorageBucket } from './config/supabase.js';
 import { config } from './config/env.js';
 
 const startServer = async () => {
   try {
     console.log('--- Initializing CaseMate AI Backend ---');
     await connectDB();
+    await ensureStorageBucket();
 
     const app = createApp();
     const server = app.listen(config.PORT, () => {

@@ -14,6 +14,7 @@ export interface ILegalDocument extends MongooseDocument {
   detectedDocumentType: string;
   mimeType: string;
   storagePath: string; // Internal safe path, never sent to frontend directly
+  storageProvider: 'supabase' | 'local';
   fileHash: string;
   fileSize: number;
   extractedText: string;
@@ -34,6 +35,7 @@ const DocumentSchema = new Schema<ILegalDocument>(
     detectedDocumentType: { type: String, default: 'Unknown' },
     mimeType: { type: String, required: true },
     storagePath: { type: String, required: true },
+    storageProvider: { type: String, enum: ['supabase', 'local'], default: 'local' },
     fileHash: { type: String, required: true, index: true },
     fileSize: { type: Number, required: true },
     extractedText: { type: String, default: '' },

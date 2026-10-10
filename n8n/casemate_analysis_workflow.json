@@ -23,7 +23,7 @@
       },
       {
         "parameters": {
-          "url": "=http://localhost:5000/api/internal/cases/{{ $json.body.caseId }}/input",
+          "url": "={{ ($env.BACKEND_URL || 'http://localhost:5000') }}/api/internal/cases/{{ $json.body.caseId }}/input",
           "sendHeaders": true,
           "headerParameters": {
             "parameters": [
@@ -60,7 +60,7 @@
       {
         "parameters": {
           "method": "POST",
-          "url": "http://localhost:5000/api/internal/agents/document-analysis",
+          "url": "={{ ($env.BACKEND_URL || 'http://localhost:5000') }}/api/internal/agents/document-analysis",
           "sendHeaders": true,
           "headerParameters": {
             "parameters": [
@@ -91,7 +91,7 @@
       {
         "parameters": {
           "method": "POST",
-          "url": "http://localhost:5000/api/internal/agents/timeline",
+          "url": "={{ ($env.BACKEND_URL || 'http://localhost:5000') }}/api/internal/agents/timeline",
           "sendHeaders": true,
           "headerParameters": {
             "parameters": [
@@ -122,7 +122,7 @@
       {
         "parameters": {
           "method": "POST",
-          "url": "http://localhost:5000/api/internal/agents/completeness",
+          "url": "={{ ($env.BACKEND_URL || 'http://localhost:5000') }}/api/internal/agents/completeness",
           "sendHeaders": true,
           "headerParameters": {
             "parameters": [
@@ -166,7 +166,7 @@
       {
         "parameters": {
           "method": "POST",
-          "url": "=http://localhost:5000/api/internal/cases/{{ $json.caseId }}/results",
+          "url": "={{ ($env.BACKEND_URL || 'http://localhost:5000') }}/api/internal/cases/{{ $json.caseId }}/results",
           "sendHeaders": true,
           "headerParameters": {
             "parameters": [

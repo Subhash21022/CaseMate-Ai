@@ -8,6 +8,20 @@ import { compileReportData, generateReportPdf } from '../services/reportGenerato
 
 const router = Router();
 
+// GET /api/cases — List cases (filtered by user if authenticated)
+router.get('/', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const filter = req.user?.id ? { userId: req.user.id } : {};
+    const cases = await CaseModel.find(filter).sort({ createdAt: -1 });
+    res.json({
+      success: true,
+      data: cases,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/cases — Create a case workspace
 router.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -17,6 +31,7 @@ router.post('/', async (req: Request, res: Response, next: NextFunction) => {
       title: validatedBody.title,
       category: validatedBody.category,
       status: 'created',
+      userId: req.user?.id,
       documents: [],
     });
 

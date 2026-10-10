@@ -17,6 +17,7 @@ export interface ICase extends Document {
   analysis?: Types.ObjectId;
   failureReason?: string;
   workflowJobId?: string;
+  userId?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -25,6 +26,7 @@ const CaseSchema = new Schema<ICase>(
   {
     title: { type: String, required: true, trim: true },
     category: { type: String, trim: true, default: 'General Legal-Aid' },
+    userId: { type: String, index: true },
     status: {
       type: String,
       enum: [

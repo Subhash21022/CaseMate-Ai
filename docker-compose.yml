@@ -1,0 +1,97 @@
+version: '3.8'
+
+# ==============================================================================
+# CaseMate AI — Multi-Container Docker Compose Stack
+# Includes: Express Backend, n8n Workflow Engine, and MongoDB
+# ==============================================================================
+
+services:
+  # ----------------------------------------------------------------------------
+  # 1. CaseMate AI Express Backend (Port 5000)
+  # ----------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: casemate-backend
+    restart: unless-stopped
+    ports:
+      - "${PORT:-5000}:5000"
+    environment:
+      - PORT=5000
+      - NODE_ENV=production
+      - FRONTEND_ORIGIN=${FRONTEND_ORIGIN:-http://localhost:5173}
+      # Defaults to local docker mongo service if MONGODB_URI is not provided in .env
+      - MONGODB_URI=${MONGODB_URI:-mongodb://mongo:27017/casemate_ai}
+      - INTERNAL_API_SECRET=${INTERNAL_API_SECRET:-casemate_dev_secret_key_892347}
+      - N8N_BASE_URL=http://n8n:5678
+      - N8N_WEBHOOK_PATH=${N8N_WEBHOOK_PATH:-/webhook/casemate-analysis}
+      - N8N_USE_TEST_WEBHOOK=false
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-anthropic/claude-sonnet-4.5}
+      - SUPABASE_URL=${SUPABASE_URL:-}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY:-}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
+      - SUPABASE_STORAGE_BUCKET=${SUPABASE_STORAGE_BUCKET:-case-documents}
+    volumes:
+      - backend_uploads:/app/uploads
+    depends_on:
+      mongo:
+        condition: service_healthy
+      n8n:
+        condition: service_started
+    networks:
+      - casemate-network
+
+  # ----------------------------------------------------------------------------
+  # 2. n8n Workflow Orchestration Engine (Port 5678)
+  # ----------------------------------------------------------------------------
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: casemate-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - N8N_BASIC_AUTH_ACTIVE=false
+      - BACKEND_URL=http://backend:5000
+      - GENERIC_TIMEZONE=UTC
+      - N8N_DEFAULT_BINARY_DATA_MODE=filesystem
+      - WEBHOOK_URL=http://localhost:5678/
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n:/backup:ro
+    networks:
+      - casemate-network
+
+  # ----------------------------------------------------------------------------
+  # 3. MongoDB Database (Port 27017)
+  # Provides zero-configuration local database for teammates without MongoDB Atlas
+  # ----------------------------------------------------------------------------
+  mongo:
+    image: mongo:7.0
+    container_name: casemate-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - casemate-network
+
+volumes:
+  backend_uploads:
+  n8n_data:
+  mongo_data:
+
+networks:
+  casemate-network:
+    driver: bridge

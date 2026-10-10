@@ -18,6 +18,10 @@ const envSchema = z.object({
   N8N_USE_TEST_WEBHOOK: z.preprocess((val) => val === 'true' || val === true, z.boolean().default(false)),
   OPENROUTER_API_KEY: z.string().optional().default(''),
   OPENROUTER_MODEL: z.string().default('anthropic/claude-3.5-sonnet'),
+  SUPABASE_URL: z.string().optional().default(''),
+  SUPABASE_ANON_KEY: z.string().optional().default(''),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().optional().default(''),
+  SUPABASE_STORAGE_BUCKET: z.string().default('case-documents'),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);

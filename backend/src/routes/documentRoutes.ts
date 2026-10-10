@@ -5,6 +5,7 @@ import { caseIdParamSchema } from '../schemas/caseSchemas.js';
 import { uploadMiddleware } from '../middleware/upload.js';
 import { calculateFileHash, checkForDuplicateDocument } from '../services/duplicateDetector.js';
 import { parseDocumentFile } from '../services/documentParser.js';
+import { uploadDocumentToStorage, getDocumentSignedUrl } from '../services/supabaseStorage.js';
 
 const router = Router({ mergeParams: true });
 
@@ -46,13 +47,17 @@ router.post(
         warnings.push(dupCheck.warning);
       }
 
-      // 4. Save Document record
+      // 4. Store file in Supabase Storage bucket (or local fallback)
+      const storageResult = await uploadDocumentToStorage(filePath, id, originalFilename, mimeType);
+
+      // 5. Save Document record
       const legalDoc = await DocumentModel.create({
         caseId: caseDoc._id,
         originalFilename,
         detectedDocumentType: parseResult.detectedType,
         mimeType,
-        storagePath: filePath, // Kept internal, not returned in public response
+        storagePath: storageResult.storagePath,
+        storageProvider: storageResult.storageProvider,
         fileHash,
         fileSize,
         extractedText: parseResult.text,
@@ -64,14 +69,14 @@ router.post(
         duplicateOf: dupCheck.duplicateOf,
       });
 
-      // 5. Link to Case and update case status
+      // 6. Link to Case and update case status
       caseDoc.documents.push(legalDoc._id);
       if (caseDoc.status === 'created') {
         caseDoc.status = 'documents_uploaded';
       }
       await caseDoc.save();
 
-      // 6. Return safe document response (without storagePath)
+      // 7. Return safe document response (without raw storagePath)
       res.status(201).json({
         success: true,
         data: {
@@ -85,6 +90,7 @@ router.post(
           extractionStatus: legalDoc.extractionStatus,
           warnings: legalDoc.warnings,
           isDuplicate: legalDoc.isDuplicate,
+          storageProvider: legalDoc.storageProvider,
           createdAt: legalDoc.createdAt,
         },
       });
@@ -113,6 +119,47 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       success: true,
       data: docs,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/cases/:id/documents/:docId/url — Get secure download / view URL
+router.get('/:docId/url', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id, docId } = req.params;
+    const legalDoc = await DocumentModel.findOne({ _id: docId, caseId: id });
+    if (!legalDoc) {
+      res.status(404).json({ success: false, error: 'Document not found' });
+      return;
+    }
+
+    if (legalDoc.storageProvider === 'supabase') {
+      const signedUrl = await getDocumentSignedUrl(legalDoc.storagePath);
+      if (!signedUrl) {
+        res.status(500).json({ success: false, error: 'Could not generate signed URL from Supabase' });
+        return;
+      }
+      res.json({
+        success: true,
+        data: {
+          url: signedUrl,
+          provider: 'supabase',
+          originalFilename: legalDoc.originalFilename,
+          mimeType: legalDoc.mimeType,
+        },
+      });
+    } else {
+      res.json({
+        success: true,
+        data: {
+          url: `/api/cases/${id}/documents/${docId}/file`,
+          provider: 'local',
+          originalFilename: legalDoc.originalFilename,
+          mimeType: legalDoc.mimeType,
+        },
+      });
+    }
   } catch (err) {
     next(err);
   }

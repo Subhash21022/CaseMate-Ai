@@ -13,7 +13,7 @@ export const connectDB = async (): Promise<void> => {
   try {
     console.log(`Connecting to MongoDB at: ${config.MONGODB_URI}...`);
     await mongoose.connect(config.MONGODB_URI, {
-      serverSelectionTimeoutMS: 3000,
+      serverSelectionTimeoutMS: 8000,
     });
     console.log('MongoDB connected successfully via URI.');
     return;

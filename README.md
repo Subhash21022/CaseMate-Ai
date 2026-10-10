@@ -83,7 +83,44 @@ flowchart TD
 
 ---
 
-## 🚀 Quickstart & Setup (Windows PowerShell)
+## 🐳 Quickstart with Docker (Recommended for Sharing & Teams)
+
+Anyone on your team can run the entire system (**Backend + n8n Orchestrator + MongoDB**) with a single command!
+
+### 1. Clone & Start
+**On Windows (PowerShell):**
+```powershell
+git clone https://github.com/Subhash21022/CaseMate-Ai.git
+cd CaseMate-Ai
+.\start.ps1
+```
+
+**On macOS / Linux:**
+```bash
+git clone https://github.com/Subhash21022/CaseMate-Ai.git
+cd CaseMate-Ai
+chmod +x start.sh
+./start.sh
+```
+
+**Or using Docker Compose directly:**
+```bash
+cp .env.example .env
+docker compose up --build -d
+# Import the workflow into n8n
+docker compose exec n8n n8n import:workflow --input=/backup/casemate_analysis_workflow.json
+docker compose exec n8n n8n publish:workflow --id=CMAnalysis01Work
+```
+
+### 2. Available Endpoints
+* **Backend API:** `http://localhost:5000`
+* **Health Check:** `http://localhost:5000/api/health`
+* **n8n Orchestrator:** `http://localhost:5678`
+* **MongoDB:** `mongodb://localhost:27017`
+
+---
+
+## 💻 Manual Setup without Docker (Windows PowerShell)
 
 ### Prerequisites
 - Node.js (v18+)
@@ -104,7 +141,11 @@ N8N_BASE_URL=http://localhost:5678
 N8N_WEBHOOK_PATH=/webhook/casemate-analysis
 N8N_USE_TEST_WEBHOOK=false
 OPENROUTER_API_KEY=
-OPENROUTER_MODEL=anthropic/claude-3.5-sonnet
+OPENROUTER_MODEL=anthropic/claude-sonnet-4.5
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+SUPABASE_STORAGE_BUCKET=case-documents
 ```
 
 ### 2. Start the Backend Server

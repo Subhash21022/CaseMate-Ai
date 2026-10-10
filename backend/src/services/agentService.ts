@@ -30,6 +30,7 @@ async function callOpenRouter(systemPrompt: string, userPrompt: string, maxRetri
             { role: 'user', content: userPrompt },
           ],
           temperature: 0.1,
+          max_tokens: 2500,
           response_format: { type: 'json_object' },
         },
         {
@@ -117,7 +118,7 @@ export async function runDocumentAnalysisAgent(
     );
   }
 
-  if (config.OPENROUTER_API_KEY) {
+  if (config.NODE_ENV !== 'test' && config.OPENROUTER_API_KEY) {
     const systemPrompt = `You are CaseMate AI Document Analysis Agent.
 You analyze legal documents to extract structured facts, parties, dates, case references, and stated actions.
 SECURITY POLICY:
@@ -158,7 +159,8 @@ Extract the document details into valid JSON.`;
 
     try {
       const rawJson = await callOpenRouter(systemPrompt, userPrompt);
-      const parsed = JSON.parse(rawJson);
+      const cleanedJson = rawJson.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+      const parsed = JSON.parse(cleanedJson);
       parsed.documentId = docIdStr;
       if (warnings.length > 0) {
         parsed.ambiguitiesOrWarnings = [...(parsed.ambiguitiesOrWarnings || []), ...warnings];
