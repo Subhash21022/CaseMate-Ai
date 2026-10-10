@@ -112,6 +112,14 @@ docker compose exec n8n n8n import:workflow --input=/backup/casemate_analysis_wo
 docker compose exec n8n n8n publish:workflow --id=CMAnalysis01Work
 ```
 
+**Option B: Using Pre-built Cloud Images (No Build Required)**
+```bash
+cp .env.example .env
+docker compose -f docker-compose.prebuilt.yml up -d
+docker compose exec n8n n8n import:workflow --input=/backup/casemate_analysis_workflow.json
+docker compose exec n8n n8n publish:workflow --id=CMAnalysis01Work
+```
+
 ### 2. Available Endpoints
 * **Backend API:** `http://localhost:5000`
 * **Health Check:** `http://localhost:5000/api/health`
