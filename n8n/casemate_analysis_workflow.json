@@ -1,0 +1,281 @@
+[
+  {
+    "id": "CMAnalysis01Work",
+    "name": "CaseMate - Case Analysis",
+    "active": false,
+    "nodes": [
+      {
+        "parameters": {
+          "httpMethod": "POST",
+          "path": "casemate-analysis",
+          "responseMode": "onReceived",
+          "options": {}
+        },
+        "id": "1e5db3a8-4bb4-4712-a1b2-111111111111",
+        "name": "Webhook Trigger",
+        "type": "n8n-nodes-base.webhook",
+        "typeVersion": 2,
+        "position": [
+          200,
+          300
+        ],
+        "webhookId": "casemate-analysis-webhook"
+      },
+      {
+        "parameters": {
+          "url": "=http://localhost:5000/api/internal/cases/{{ $json.body.caseId }}/input",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "x-internal-secret",
+                "value": "casemate_dev_secret_key_892347"
+              }
+            ]
+          },
+          "options": {}
+        },
+        "id": "2e5db3a8-4bb4-4712-a1b2-222222222222",
+        "name": "Fetch Case Input",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          420,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const caseData = $input.first().json.data;\nconst caseId = caseData.caseId;\nconst documents = caseData.documents || [];\n\nif (documents.length === 0) {\n  throw new Error('No documents found for case: ' + caseId);\n}\n\nreturn documents.map(doc => ({\n  json: {\n    caseId: caseId,\n    caseCategory: caseData.category,\n    documentId: doc.documentId,\n    originalFilename: doc.originalFilename,\n    detectedDocumentType: doc.detectedDocumentType,\n    extractedText: doc.extractedText,\n    pageCount: doc.pageCount,\n    warnings: doc.warnings\n  }\n}));"
+        },
+        "id": "3e5db3a8-4bb4-4712-a1b2-333333333333",
+        "name": "Prepare Documents",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          640,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://localhost:5000/api/internal/agents/document-analysis",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "x-internal-secret",
+                "value": "casemate_dev_secret_key_892347"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"documentId\": \"{{ $json.documentId }}\",\n  \"caseCategory\": \"{{ $json.caseCategory }}\"\n}",
+          "options": {}
+        },
+        "id": "4e5db3a8-4bb4-4712-a1b2-444444444444",
+        "name": "Agent 1: Document Analysis",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          860,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://localhost:5000/api/internal/agents/timeline",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "x-internal-secret",
+                "value": "casemate_dev_secret_key_892347"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"caseId\": \"{{ $('Fetch Case Input').first().json.data.caseId }}\",\n  \"docAnalysisOutputs\": {{ JSON.stringify($input.all().map(i => i.json.data)) }}\n}",
+          "options": {}
+        },
+        "id": "5e5db3a8-4bb4-4712-a1b2-555555555555",
+        "name": "Agent 2: Timeline Agent",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1080,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "http://localhost:5000/api/internal/agents/completeness",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "x-internal-secret",
+                "value": "casemate_dev_secret_key_892347"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"caseId\": \"{{ $('Fetch Case Input').first().json.data.caseId }}\",\n  \"docAnalysisOutputs\": {{ JSON.stringify($('Agent 1: Document Analysis').all().map(i => i.json.data)) }},\n  \"timelineEvents\": {{ JSON.stringify($input.first().json.data.timelineEvents) }},\n  \"dateConflicts\": {{ JSON.stringify($input.first().json.data.detectedDateConflicts) }}\n}",
+          "options": {}
+        },
+        "id": "6e5db3a8-4bb4-4712-a1b2-666666666666",
+        "name": "Agent 3: Completeness Agent",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1300,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "jsCode": "const caseId = $('Fetch Case Input').first().json.data.caseId;\nconst docAnalyses = $('Agent 1: Document Analysis').all().map(i => i.json.data);\nconst timelineData = $('Agent 2: Timeline Agent').first().json.data;\nconst completenessData = $input.first().json.data;\n\nconst allFacts = docAnalyses.flatMap(d => d.extractedFacts || []);\nconst timelineEvents = timelineData.timelineEvents || [];\nconst missingInfo = completenessData.missingInformation || [];\nconst conflicts = completenessData.conflicts || [];\nconst questions = completenessData.clarificationQuestions || [];\n\nreturn [{\n  json: {\n    caseId: caseId,\n    extractedFacts: allFacts,\n    timelineEvents: timelineEvents,\n    missingInformation: missingInfo,\n    conflicts: conflicts,\n    clarificationQuestions: questions,\n    summary: `CaseMate AI analysis completed across ${docAnalyses.length} document(s).`,\n    humanReviewRequired: conflicts.length > 0,\n    verificationNotes: []\n  }\n}];"
+        },
+        "id": "7e5db3a8-4bb4-4712-a1b2-777777777777",
+        "name": "Assemble Workflow Payload",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1520,
+          300
+        ]
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "=http://localhost:5000/api/internal/cases/{{ $json.caseId }}/results",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "x-internal-secret",
+                "value": "casemate_dev_secret_key_892347"
+              },
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={\n  \"extractedFacts\": {{ JSON.stringify($json.extractedFacts) }},\n  \"timelineEvents\": {{ JSON.stringify($json.timelineEvents) }},\n  \"missingInformation\": {{ JSON.stringify($json.missingInformation) }},\n  \"conflicts\": {{ JSON.stringify($json.conflicts) }},\n  \"clarificationQuestions\": {{ JSON.stringify($json.clarificationQuestions) }},\n  \"summary\": \"{{ $json.summary }}\",\n  \"humanReviewRequired\": {{ $json.humanReviewRequired }},\n  \"verificationNotes\": {{ JSON.stringify($json.verificationNotes) }}\n}",
+          "options": {}
+        },
+        "id": "8e5db3a8-4bb4-4712-a1b2-888888888888",
+        "name": "Save Results to Backend",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1740,
+          300
+        ]
+      }
+    ],
+    "connections": {
+      "Webhook Trigger": {
+        "main": [
+          [
+            {
+              "node": "Fetch Case Input",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Fetch Case Input": {
+        "main": [
+          [
+            {
+              "node": "Prepare Documents",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Prepare Documents": {
+        "main": [
+          [
+            {
+              "node": "Agent 1: Document Analysis",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Agent 1: Document Analysis": {
+        "main": [
+          [
+            {
+              "node": "Agent 2: Timeline Agent",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Agent 2: Timeline Agent": {
+        "main": [
+          [
+            {
+              "node": "Agent 3: Completeness Agent",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Agent 3: Completeness Agent": {
+        "main": [
+          [
+            {
+              "node": "Assemble Workflow Payload",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Assemble Workflow Payload": {
+        "main": [
+          [
+            {
+              "node": "Save Results to Backend",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1"
+    }
+  }
+]

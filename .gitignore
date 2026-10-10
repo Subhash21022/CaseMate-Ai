@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Uploads and temporary files
+uploads/
+backend/uploads/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test coverage
+coverage/
+.vitest/
+
+# n8n local data
+.n8n/
